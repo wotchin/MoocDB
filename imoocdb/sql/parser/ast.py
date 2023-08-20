@@ -80,3 +80,14 @@ class FunctionOperation(Operation):
     pass
 
 
+class Update(ASTNode):
+    def __init__(self, table, columns, where):
+        super().__init__()
+
+        # update t1 set a = 1 where b > 100;
+        self.table = table
+        assert isinstance(columns, dict)
+
+        self.columns = columns
+        self.where = where
+

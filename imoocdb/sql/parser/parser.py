@@ -104,8 +104,16 @@ class SQLLexer(sly.Lexer):
 # select a, count(a) from t1 group by a where b > 100;
 from imoocdb.sql.parser.ast import *
 
+
 class SQLParser(sly.Parser):
     tokens = SQLLexer.tokens
+
+    # main entrance
+    # 保证入口点的单一
+    @_('select',
+       'update')
+    def query(self, p):
+        return p[0]
 
     # select *;  -> Select([Star()])
     @_('SELECT target_columns')
@@ -241,7 +249,7 @@ class SQLParser(sly.Parser):
        'expr LEQ expr',
        'expr LT expr',
        'expr AND expr',
-       'expr OR expr',)
+       'expr OR expr', )
     def expr(self, p):
         return BinaryOperation(op=p[1], args=(p.expr0, p.expr1))
 
@@ -321,6 +329,30 @@ class SQLParser(sly.Parser):
     def empty(self, p):
         pass
 
+    # update 语句的规则实现
+    @_('UPDATE identifier SET update_parameter_list',
+       'UPDATE identifier SET update_parameter_list WHERE expr')
+    def update(self, p):
+        where = getattr(p, 'expr', None)
+        return Update(
+            table=p.identifier,
+            columns=p.update_parameter_list,
+            where=where
+        )
+
+    # update t1 set a = 1, b = 2, ...
+    @_('update_parameter',  # 可以透传到该规则上
+       'update_parameter_list COMMA update_parameter')
+    def update_parameter_list(self, p):
+        params = getattr(p, 'update_parameter_list', {})
+        params.update(p.update_parameter)
+        return params
+
+    # update t1 set a = 1;
+    @_('id EQ expr')
+    def update_parameter(self, p):
+        return {p.id: p.expr}
+
     def error(self, p):
         if p:
             raise SyntaxError(f'Syntax error at token {p.type}: "{p.value}".')
@@ -333,11 +365,3 @@ def query_parse(sql_stmt):
     parser = SQLParser()
     tokens = lexer.tokenize(sql_stmt)
     return parser.parse(tokens)
-
-
-ast = query_parse('select a, b from t1')
-ast = query_parse('select a, b from t1 where a > c')
-ast = query_parse('select a, b from t1 where a > c order by b')
-ast = query_parse('select a, count(a) from t1 group by a where b > 100')
-print(ast)
-query_parse('select a, b from t1 order by b order by a')
