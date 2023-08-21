@@ -91,3 +91,19 @@ class Update(ASTNode):
         self.columns = columns
         self.where = where
 
+
+class Insert(ASTNode):
+    def __init__(self, table, columns, values):
+        # 不支持类似语句：
+        # 'insert into t1 select * from t2;'
+        super().__init__()
+        self.table = table
+        self.columns = columns
+        self.values = values
+
+
+class Delete(ASTNode):
+    def __init__(self, table, where):
+        super().__init__()
+        self.table = table
+        self.where = where

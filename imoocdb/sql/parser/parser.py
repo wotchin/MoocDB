@@ -111,7 +111,9 @@ class SQLParser(sly.Parser):
     # main entrance
     # 保证入口点的单一
     @_('select',
-       'update')
+       'update',
+       'insert',
+       'delete')
     def query(self, p):
         return p[0]
 
@@ -352,6 +354,33 @@ class SQLParser(sly.Parser):
     @_('id EQ expr')
     def update_parameter(self, p):
         return {p.id: p.expr}
+
+    # delete 语句
+    @_('DELETE FROM from_table WHERE expr',
+       'DELETE FROM from_table')
+    def delete(self, p):
+        where = getattr(p, 'expr', None)
+
+        if where and not isinstance(where, Operation):
+            raise SyntaxError(
+                f"WHERE clause must contain boolean condition not: {str(where)}")
+
+        return Delete(table=p.from_table, where=where)
+
+    # insert 语句
+    @_('INSERT INTO from_table LPAREN target_columns RPAREN VALUES expr_list_set',
+       'INSERT INTO from_table VALUES expr_list_set')
+    def insert(self, p):
+        columns = getattr(p, 'target_columns', None)
+        return Insert(table=p.from_table, columns=columns, values=p.expr_list_set)
+
+    @_('expr_list_set COMMA expr_list_set')
+    def expr_list_set(self, p):
+        return p.expr_list_set0 + p.expr_list_set1
+
+    @_('LPAREN expr_list RPAREN')
+    def expr_list_set(self, p):
+        return [p.expr_list]
 
     def error(self, p):
         if p:

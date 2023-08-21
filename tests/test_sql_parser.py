@@ -18,8 +18,15 @@ def test_parse_select_statement():
 
 def test_parse_dml_statement():
     ast = query_parse('UPDATE t1 set a = 1 where a > 1')
-    print(ast)
+    ast = query_parse('insert into t1 values (1,2,3)')
+    assert str(ast) == '<Insert> table=<Identifier> parts=t1 columns=None values=[[<Constant> value=1, <Constant> value=2, <Constant> value=3]]'
+    ast = query_parse('insert into t1(a,b,c) values (1,2,3)')
+    assert str(ast) == '<Insert> table=<Identifier> parts=t1 columns=[<Identifier> parts=a, <Identifier> parts=b, <Identifier> parts=c] values=[[<Constant> value=1, <Constant> value=2, <Constant> value=3]]'
+    ast = query_parse('delete from t1')
+    assert str(ast) == '<Delete> table=<Identifier> parts=t1 where=None'
+    ast = query_parse('delete from t1 where a > 100')
+    assert str(ast) == '<Delete> table=<Identifier> parts=t1 where=<BinaryOperation> op=> args=[<Identifier> parts=a, <Constant> value=100]'
 
 
-# test_parse_select_statement()
+test_parse_select_statement()
 test_parse_dml_statement()
