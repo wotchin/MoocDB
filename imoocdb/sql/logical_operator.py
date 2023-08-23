@@ -1,14 +1,27 @@
-from .parser.ast import BinaryOperation, FunctionOperation
+import logging
+
+from imoocdb.common.fabric import TableColumn
+
+from .parser.ast import BinaryOperation, FunctionOperation, Identifier, Constant
 
 
 class LogicalOperator:
     def __init__(self, name):
         self.name = name
         self.children = []  # 用于放置该逻辑算子的子节点
+        self.parent = None  # 用于快速回溯到父节点
 
     def add_child(self, operator):
         assert operator is not None  # null, NULL
+        # 对于已经有父节点的算子，不能添加为子节点
+        # 提示：3.11 课后修复该bug, 对于自连接(self-join)，子节点可以是重复的
+        if self.name != 'Join':
+            assert operator.parent is None
         self.children.append(operator)
+        operator.parent = self
+
+        # 返回刚刚添加的子节点
+        return operator
 
 
 class ScanOperator(LogicalOperator):
@@ -17,20 +30,39 @@ class ScanOperator(LogicalOperator):
     def __init__(self, table_name):
         super().__init__('Scan')
         self.table_name = table_name
+        # todo:
+        # 如果这个columns是可以裁剪的，此处返回被裁减后的列数组
+        self.columns = None
         # 注意：关于扫描表，应该扫描哪些字段，是否需要提前进行
         # 列裁剪，应该有对应的字段进行承载
+        self.condition = None
 
 
 class Condition:
     def __init__(self, operation: BinaryOperation):
         self.sign = operation.op
-        self.left = operation.args[0]
-        self.right = operation.args[1]
+
+        # 把 condition 中的 Identifier 转换为TableColumn
+        self.left = self._to_table_column(operation.args[0])
+        self.right = self._to_table_column(operation.args[1])
 
         # ... where a > 100;
         #    left : a TableColumn封装之后的字段
         #    right : 100 constant: int, string
         #    sign : >
+
+    @staticmethod
+    def _to_table_column(node):
+        if not isinstance(node, Identifier):
+            assert isinstance(node, Constant)
+            # 例如，Constant(1)
+            return node.value
+
+        full_name = node.parts
+        if '.' not in full_name:
+            raise SyntaxError('not set a table name in the condition.')
+        table_name, column = full_name.split('.')
+        return TableColumn(table_name, column)
 
 
 class FilterOperator(LogicalOperator):
@@ -89,6 +121,10 @@ class Query(LogicalOperator):
         self.project_columns = projection_columns
         # 有些“缓存”信息，可以放到这里面，便于加快后面的执行效果
         self.scan_operators = []
+        self.where_condition = None
+        self.join_operator = None
+        self.sort_operator = None
+        self.group_by_column = None
 
 
 class InsertOperator(LogicalOperator):
@@ -121,6 +157,7 @@ class DeleteOperator(LogicalOperator):
 
 class UpdateOperator(LogicalOperator):
     """Update语句产生的逻辑算子"""
+
     def __init__(self, table_name, columns, values, condition=None):
         super().__init__('Update')
         self.table_name = table_name

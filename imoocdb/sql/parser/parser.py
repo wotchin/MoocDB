@@ -90,7 +90,7 @@ class SQLLexer(sly.Lexer):
 
     INTEGER = r'\d+'
 
-    @_(r'[a-zA-Z_][a-zA-Z0-9_]*')
+    @_(r'[a-zA-Z_][a-zA-Z0-9_\.]*')
     def ID(self, t):
         return t
 
@@ -117,7 +117,7 @@ class SQLParser(sly.Parser):
     def query(self, p):
         return p[0]
 
-    # select *;  -> Select([Star()])
+    # select * ...;  -> Select([Star()]) ...
     @_('SELECT target_columns')
     def select(self, p):
         return Select(targets=p.target_columns)
@@ -222,11 +222,13 @@ class SQLParser(sly.Parser):
         return select
 
     # Join 子句
-    @_('from_table join_clause from_table')
+    # 提示：3.11 课后修复该处bug, 语法解析中缺乏ON关键字
+    @_('from_table join_clause from_table ON expr')
     def join_tables(self, p):
         return Join(left=p[0],
                     right=p[2],
-                    join_type=p.join_clause)
+                    join_type=p.join_clause,
+                    condition=p.expr)
 
     @_(JoinType.LEFT_JOIN,
        JoinType.RIGHT_JOIN,

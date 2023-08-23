@@ -5,6 +5,19 @@ from imoocdb.sql.logical_operator import *
 from imoocdb.catalog import catalog_table
 
 
+# 可以用于判断表或者列是否存在，用于检验输入SQL语句的合法性
+# 我们的代码中有部分早期的实现并没有用到这两个函数，后面我们统一进行重构
+def table_exists(table_name):
+    return bool(catalog_table.select(lambda r: r.table_name == table_name))
+
+
+def column_exists(table_name, column_name):
+    tables = catalog_table.select(lambda r: r.table_name == table_name)
+    if len(tables) == 1 and column_name in tables[0].columns:
+        return True
+    return False
+
+
 class SelectTransformer:
     @staticmethod
     def transform_clause_from(ast, query):
@@ -32,7 +45,7 @@ class SelectTransformer:
 
     @staticmethod
     def transform_target_list(ast, query):
-        """处理投影部分"""
+        """处理投影projection部分"""
         target_list = []
         for target in ast.targets:
             if isinstance(target, Star):
@@ -52,7 +65,16 @@ class SelectTransformer:
                 if '.' not in full_name:
                     raise SQLLogicalPlanError('please set a specific table name.')
                 # t1.name -> t1, name
+                # select t1.name from t1;
+                # select name from t1; <- 我们也可以自动来补充该 t1 表的信息，但是
+                # 会增加代码量，其过程，就是从from后面所涉及的表中进行遍历列信息即可
                 table_name, column = full_name.split('.')
+                if not column_exists(table_name, column):
+                    raise SQLLogicalPlanError(f'not found {full_name}.')
+
+                # pair 对，用一个class来封装，其是也可以用list或者tuple来封装
+                # 但是，class封装会增加表达力，指的是我们可以通过判断数据类型，来
+                # 知道这是不是一个表的字段
                 target_list.append(TableColumn(table_name, column))
             elif isinstance(target, FunctionOperation):
                 # function 会麻烦一点，因为涉及到 function 内部还有些字段
@@ -66,27 +88,176 @@ class SelectTransformer:
     @staticmethod
     def transform_clause_where(ast, query):
         """处理选择部分"""
-        pass
+        if not ast.where:
+            return
+        # todo: 暂时先不支持多个条件，先支持一个条件，后边有机会再增强
+        condition = Condition(ast.where)
+        query.where_condition = FilterOperator(condition)
+        # 本节内容结尾“bug”: 是因为此处没有判断表中存在where子句中的列
+        # 下面的代码补充该部分的实现：
+        for node in (condition.left, condition.right):
+            if (isinstance(node, TableColumn) and
+                    not column_exists(node.table_name, node.column_name)):
+                raise SQLLogicalPlanError(f'not found table column {node}.')
+
+        # 后面，把这个filter 放到对应的scan算子的头上 -- done
 
     @staticmethod
     def transform_clause_join(ast, query):
         """处理连接部分"""
-        pass
+        # Join 语句出现在from_table字段中
+        if not isinstance(ast.from_table, Join):
+            return
+        join_ast = ast.from_table
+
+        # 做一个简单的检查，判断是否存在这个表
+        # select t1.name, t2.age from t1 left join t2 on t1.id = t2.uid;
+        left_table_name = join_ast.left.parts
+        right_table_name = join_ast.right.parts
+        if not table_exists(left_table_name):
+            raise SQLLogicalPlanError(f'not found the table {left_table_name}.')
+        if not table_exists(right_table_name):
+            raise SQLLogicalPlanError(f'not found the table {right_table_name}.')
+
+        # 验证一下Join condition中的字段是否合法
+        # 提示：3.11 中课后修复此处bug, not column_exists() 条件中忘了 'not'
+        join_condition = Condition(join_ast.condition)
+        if (isinstance(join_condition.left, TableColumn) and
+                not column_exists(join_condition.left.table_name,
+                                  join_condition.left.column_name)):
+            raise SQLLogicalPlanError(f'not found the column {join_condition.left}.')
+        if (isinstance(join_condition.right, TableColumn) and
+                not column_exists(join_condition.right.table_name,
+                                  join_condition.right.column_name)):
+            raise SQLLogicalPlanError(f'not found the column {join_condition.right}.')
+
+        join_operator = JoinOperator(join_type=join_ast.join_type,
+                                     left_table_name=left_table_name,
+                                     right_table_name=right_table_name,
+                                     join_condition=join_condition)
+        query.join_operator = join_operator
+
+        # 做完了吗？没有！
+        # 思考：是否也可以放到后面一起组合算子树呢？
+        # 因为Join的子节点是数据的来源，而数据的来源是Scan算子，因此，我们为
+        # JoinOperator 添加ScanOperator子节点
+        for scan_operator in query.scan_operators:
+            # 问题思考：下面这两个 if 语句的顺序可以换吗？
+            if scan_operator.table_name == join_operator.left_table_name:
+                join_operator.add_child(scan_operator)
+            # 提示: 3.11 课后修复bug, else -> 变为 elif 否则对于self-join会重复添加
+            elif scan_operator.table_name == join_operator.right_table_name:
+                join_operator.add_child(scan_operator)
 
     @staticmethod
     def transform_clause_order(ast, query):
         """处理排序部分"""
-        pass
+        if not ast.order_by:
+            return
+        full_name = ast.order_by.column.parts
+        if '.' not in full_name:
+            raise SQLLogicalPlanError(f'please set a table name for the column {full_name}.')
+        table_name, column = full_name.split('.')
+
+        # 检查一下列是否存在
+        if not column_exists(table_name, column):
+            raise SQLLogicalPlanError(f'not found the column {full_name}.')
+
+        query.sort_operator = SortOperator(sort_column=TableColumn(table_name, column),
+                                           asc=(ast.order_by.direction == 'ASC'))
 
     @staticmethod
     def transform_clause_group(ast, query):
         """处理聚合部分"""
-        pass
+        if not ast.group_by:
+            return
+        full_name = ast.group_by
+        if '.' not in full_name:
+            raise SQLLogicalPlanError(f'please set a table name for the column {full_name}.')
+        table_name, column = full_name.split('.')
+
+        # 检查一下列是否存在
+        if not column_exists(table_name, column):
+            raise SQLLogicalPlanError(f'not found the column {full_name}.')
+        query.group_by_column = TableColumn(table_name, column)
+
+        # 检查一下是否存在聚合函数？
+        # 我们支持不加聚合函数的场景吗？如果不支持会怎样？支持又会怎样呢？
+        # todo: implement
+        raise NotImplementedError('not implemented')
 
     @staticmethod
-    def rewrite(ast, query):
+    def rewrite(query):
         """逻辑计划的初步整理、优化"""
-        pass
+        # 我们组合各个query的属性，把他们按照顺序构建起一颗树来
+        # 这个顺序正好是 transform 过程反过来
+
+        all_seen_columns = {}  # key: 表名, value: 列数组
+        building_node = query
+        if query.group_by_column:
+            # todo: 完善下面的字段
+            operator = GroupOperator(group_by_column=query.group_by_column,
+                                     aggregate_function_name=None,
+                                     aggregate_column=None,
+                                     )
+            building_node = building_node.add_child(operator)
+            # Keras 有类似的写法
+            # x = Layer()(x)
+        if query.sort_operator:
+            building_node = building_node.add_child(query.sort_operator)
+        if query.join_operator:
+            building_node = building_node.add_child(query.join_operator)
+        if query.where_condition:
+            # 把 where 条件下推到对应的扫描算子上
+            # 在我们的场景中，有两种比较典型的场景不能直接推:
+            # eg1: select * from t1, t2 where t1.a > t2.b;
+            # eg2: select * from t1 where 1 > 2;
+            # eg3: select * from t1 where t1.a > 100;
+            # eg1 可以此时改写为 inner join
+            # eg2 可以改写为直接返回空结果集
+            # eg3 可以把 filter 条件下推到扫描过程中
+            # 思考：你还能想到哪些不能推的场景呢？
+
+            filter_operator = query.where_condition
+            # eg1 的场景：
+            if (isinstance(filter_operator.condition.left, TableColumn) and
+                    isinstance(filter_operator.condition.right, TableColumn)):
+                # 判断一下是否合法
+                table_names = (query.join_operator.left_table_name,
+                               query.join_operator.right_table_name)
+                if not (query.join_operator and
+                        filter_operator.condition.left.table_name in table_names and
+                        filter_operator.condition.right.table_name in table_names):
+                    raise SQLLogicalPlanError(f'tables in where clause should be all seen in '
+                                              f'the join clause.')
+
+                # 不支持的场景：
+                # select * from t1 left join t2 on t1.id = t2.id where t1.age > t2.age;
+                if query.join_operator.join_type != JoinType.CROSS_JOIN:
+                    raise NotImplementedError('not supported complex where clause.')
+
+                query.join_operator.join_type = JoinType.INNER_JOIN
+                query.join_operator.condition = filter_operator.condition
+            # 其他场景，这里面我们没有针对eg2单独改写，但是你可以试试~
+            else:
+                table_column = None
+                if isinstance(filter_operator.condition.left, TableColumn):
+                    table_column = filter_operator.condition.left
+                elif isinstance(filter_operator.condition.right, TableColumn):
+                    table_column = filter_operator.condition.right
+                else:
+                    # todo: 此处是 eg2 的改写地方
+                    pass
+
+                if table_column:
+                    for scan_operator in query.scan_operators:
+                        if scan_operator.table_name == table_column.table_name:
+                            scan_operator.condition = filter_operator.condition
+
+        if not query.join_operator:
+            assert len(query.scan_operators) == 1
+            building_node.add_child(query.scan_operators[0])
+        # todo: 现在可以做一些RBO的优化动作了，例如列裁剪
 
     @staticmethod
     def transform(ast: Select):
@@ -100,12 +271,15 @@ class SelectTransformer:
 
         # 到此为止，我们就可产生一个比较朴素的、原始的 Query
         # 此时，我们可以进一步套用逻辑查询优化（重写）机制来优化Query
-        SelectTransformer.rewrite(ast, query)
+        SelectTransformer.rewrite(query)
         return query
 
 
 def query_logical_plan(ast: ASTNode) -> LogicalOperator:
-    pass
+    if isinstance(ast, Select):
+        return SelectTransformer.transform(ast)
+    else:
+        raise NotImplementedError('not supported non-select statement yet.')
 
 
 def query_physical_plan(logical_plan: LogicalOperator) -> "PlanTree":
