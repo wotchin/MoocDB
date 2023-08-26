@@ -7,3 +7,10 @@
 关于sly的代码案例（计算器）：
 > https://github.com/dabeaz/sly
 
+# SQL引擎
+## 逻辑算子
+- ScanOperator: 用于扫描数据，是数据来源的最基本获取点
+- GroupOperator: 用于做聚合
+- HashOperator: 用户做连接操作
+- SortOperator: 用于表明该SQL语句涉及排序操作
+...
