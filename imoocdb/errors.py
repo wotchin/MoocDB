@@ -8,3 +8,8 @@ class NoticeError(Exception):
 
 class SQLLogicalPlanError(NoticeError):
     pass
+
+
+class ExecutorCheckError(NoticeError):
+    pass
+

@@ -6,7 +6,8 @@ from imoocdb.storage.entry import (table_tuple_get_all,
                                    )
 from imoocdb.sql.logical_operator import Condition
 from imoocdb.common.fabric import TableColumn
-from imoocdb.catalog.entry import catalog_table
+from imoocdb.catalog.entry import catalog_table, catalog_index
+from imoocdb.errors import ExecutorCheckError
 
 
 def is_condition_true(values: dict, condition):
@@ -121,36 +122,94 @@ class IndexScan(PhysicalOperator):
         super().__init__('IndexScan')
         self.index_name = index_name
         self.condition = condition
+        self.condition_column = None
+        self.constant = None
+        self.tuple_get_equal_value = index_tuple_get_equal_value
+        self.tuple_get_range = index_tuple_get_range
 
     def open(self):
-        pass
+        constants = []
+        columns = []
+        for node in (self.condition.left, self.condition.right):
+            if isinstance(node, TableColumn):
+                columns.append(node)
+            else:
+                constants.append(node)
+        if not (constants and columns):
+            raise ExecutorCheckError('bad scan condition')
+
+        if len(columns) != 1 or len(constants) != 1:
+            raise ExecutorCheckError('only supported one condition/value column.')
+        self.condition_column = columns[0]
+        self.constant = constants[0]
+        self.fill_in_columns()
+
+    def fill_in_columns(self):
+        # 采集上来的元组tuple结构
+        self.columns = []
+        table_name = catalog_index.select(
+            lambda r: r.index_name == self.index_name
+        )[0].table_name
+        for column in catalog_table.select(
+                lambda r: r.table_name == table_name)[0].columns:
+            self.columns.append(TableColumn(table_name, column))
 
     def close(self):
         pass
 
     def next(self):
-        left = ...
-        right = ...
-
         if not self.condition:
             raise NotImplementedError()
         elif self.condition.sign == '=':
-            yield index_tuple_get_equal_value(self.index_name, ...)
+            for tup in self.tuple_get_equal_value(
+                    self.index_name, equal_value=(self.constant,)
+            ):
+                yield tup
+        elif self.condition.sign == '>':
+            # eg, ... where t1.a > 100
+            # 等价于 ... where 100 < t1.a
+            start = end = None
+            if isinstance(self.condition.left, TableColumn):
+                start = (self.constant,)
+            else:
+                end = (self.constant,)
+
+            for tup in self.tuple_get_range(
+                    self.index_name, start=start, end=end
+            ):
+                yield tup
+        elif self.condition.sign == '<':
+            # eg, ... t1.a < 100
+            start = end = None
+            if isinstance(self.condition.left, TableColumn):
+                end = (self.constant,)
+            else:
+                start = (self.constant,)
+            for tup in self.tuple_get_range(
+                    self.index_name, start=start, end=end
+            ):
+                yield tup
+        else:
+            raise NotImplementedError(
+                f'not supported operation {self.condition.sign} for {self.name}'
+            )
 
 
-class CoveredIndexScan(PhysicalOperator):
+class CoveredIndexScan(IndexScan):
     def __init__(self, index_name, condition=None):
-        super().__init__('CoveredIndexScan')
-        self.index_name = index_name
-        self.condition = condition
+        super().__init__(index_name, condition)
+        self.name = 'CoveredIndexScan'
+        self.tuple_get_equal_value = covered_index_tuple_get_equal_value
+        self.tuple_get_range = covered_index_tuple_get_range
 
-    def open(self):
-        pass
+    def fill_in_columns(self):
+        # 采集上来的元组tuple结构，就是index的column结构
+        self.columns = []
+        table_name = catalog_index.select(
+            lambda r: r.index_name == self.index_name
+        )[0].table_name
 
-    def close(self):
-        pass
-
-    def next(self):
-        pass
-        # todo: 暂时先不考虑条件检查
-        # yield index_tuple_get_range(self.index_name)
+        for column in catalog_index.select(
+            lambda r: r.index_name == self.index_name
+        )[0].columns:
+            self.columns.append(TableColumn(table_name, column))
