@@ -9,7 +9,7 @@ from imoocdb.storage.entry import (table_tuple_get_all,
                                    )
 from imoocdb.sql.logical_operator import Condition
 from imoocdb.common.fabric import TableColumn
-from imoocdb.catalog.entry import catalog_table, catalog_index
+from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
 from imoocdb.errors import ExecutorCheckError
 from imoocdb.constant import TEMP_DIRECTORY
 from imoocdb.session_manager import get_current_session_id
@@ -388,14 +388,11 @@ class HashAgg(Materialize):
 
     @staticmethod
     def _aggregate_function(name):
-        # 此处也可以用 if - else, 有些语言中的 switch - case
-        return {
-            'count': len,
-            'sum': sum,
-            'max': max,
-            'min': min,
-            'avg': (lambda x: sum(x) / len(x))
-        }[name]
+        results = catalog_function.select(
+            lambda r: r.function_name == name and r.agg_function)
+        if len(results) != 1:
+            raise ExecutorCheckError(f'not found the aggregation function {name}.')
+        return results[0].callback
 
     def next(self):
         self.materialize()

@@ -125,6 +125,7 @@ class Query(LogicalOperator):
         self.join_operator = None
         self.sort_operator = None
         self.group_by_column = None
+        self.aggregate_columns = []
 
 
 class InsertOperator(LogicalOperator):

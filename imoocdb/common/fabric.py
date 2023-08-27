@@ -26,4 +26,23 @@ class TableColumn:
         return hash((self.table_name, self.column_name))
 
 
+class FunctionColumn:
+    def __init__(self, function_name, *args):
+        self.function_name = function_name
+        self.args = tuple(args)
+        for arg in self.args:
+            assert isinstance(arg, TableColumn)
 
+    def __eq__(self, other):
+        # equals()
+        if not isinstance(other, FunctionColumn):
+            return False
+        # 下面的比较过程，会直接调用 __repr__，相当于进行了字符串比较
+        return str(self) == str(other)
+
+    def __hash__(self):
+        return hash((self.function_name,) + self.args)
+
+    def __repr__(self):
+        # toString()
+        return f'{self.function_name}{self.args}'

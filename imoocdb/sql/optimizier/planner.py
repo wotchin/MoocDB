@@ -1,8 +1,8 @@
-from imoocdb.common.fabric import TableColumn
+from imoocdb.common.fabric import TableColumn, FunctionColumn
 from imoocdb.errors import SQLLogicalPlanError
 from imoocdb.sql.parser.ast import *
 from imoocdb.sql.logical_operator import *
-from imoocdb.catalog import catalog_table
+from imoocdb.catalog import catalog_table, catalog_function
 
 
 # 可以用于判断表或者列是否存在，用于检验输入SQL语句的合法性
@@ -16,6 +16,14 @@ def column_exists(table_name, column_name):
     if len(tables) == 1 and column_name in tables[0].columns:
         return True
     return False
+
+
+def function_exists(function_name):
+    results = catalog_function.select(
+        lambda r: r.function_name == function_name and r.agg_function)
+    if len(results) != 1:
+        return False
+    return True
 
 
 class SelectTransformer:
@@ -80,9 +88,19 @@ class SelectTransformer:
                 # function 会麻烦一点，因为涉及到 function 内部还有些字段
                 # e.g., select count(t1.a) from t1 group by t1.a;
                 # target_list.append(Function)
-                raise NotImplementedError('not supported function yet.')
+                args = []
+                for arg in target.args:
+                    full_name = arg.parts
+                    table_name, column = full_name.split('.')
+                    if not column_exists(table_name, column):
+                        raise SQLLogicalPlanError(f'not found {full_name}.')
+                    args.append(TableColumn(table_name, column))
+                function_name = target.op
+                if not function_exists(function_name):
+                    raise SQLLogicalPlanError(f'not found {function_name}.')
+                target_list.append(FunctionColumn(function_name, *args))
             else:
-                raise
+                raise SQLLogicalPlanError(f'unknown target {target}.')
             query.project_columns.extend(target_list)
 
     @staticmethod
@@ -171,7 +189,13 @@ class SelectTransformer:
         """处理聚合部分"""
         if not ast.group_by:
             return
-        full_name = ast.group_by
+        group_by_list = ast.group_by
+        if len(group_by_list) != 1:
+            raise NotImplementedError(
+                f'only supported one column for the group by clause.'
+            )
+        full_name = group_by_list[0].parts
+
         if '.' not in full_name:
             raise SQLLogicalPlanError(f'please set a table name for the column {full_name}.')
         table_name, column = full_name.split('.')
@@ -181,10 +205,19 @@ class SelectTransformer:
             raise SQLLogicalPlanError(f'not found the column {full_name}.')
         query.group_by_column = TableColumn(table_name, column)
 
-        # 检查一下是否存在聚合函数？
-        # 我们支持不加聚合函数的场景吗？如果不支持会怎样？支持又会怎样呢？
-        # todo: implement
-        raise NotImplementedError('not implemented')
+        # 检查一下是否存在聚合函数？在 transform_target_list() 中已经完成了检查
+        for column in query.project_columns:
+            if isinstance(column, FunctionColumn) and catalog_function.select(
+                    lambda r: r.function_name == column.function_name and
+                              r.agg_function):
+                query.aggregate_columns.append(column)
+
+        if len(query.aggregate_columns) > 1:
+            raise NotImplementedError('not supported one more aggregation functions.')
+        if query.aggregate_columns and len(query.aggregate_columns[0].args) != 1:
+            raise NotImplementedError(
+                f'aggregation function {query.aggregate_columns[0].function_name} '
+                f'must have one column.')
 
     @staticmethod
     def rewrite(query):
@@ -195,11 +228,11 @@ class SelectTransformer:
         all_seen_columns = {}  # key: 表名, value: 列数组
         building_node = query
         if query.group_by_column:
-            # todo: 完善下面的字段
-            operator = GroupOperator(group_by_column=query.group_by_column,
-                                     aggregate_function_name=None,
-                                     aggregate_column=None,
-                                     )
+            operator = GroupOperator(
+                group_by_column=query.group_by_column,
+                aggregate_function_name=query.aggregate_columns[0].function_name,
+                aggregate_column=query.aggregate_columns[0].args[0],
+            )
             building_node = building_node.add_child(operator)
             # Keras 有类似的写法
             # x = Layer()(x)
