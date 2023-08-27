@@ -1,3 +1,6 @@
+import os
+import pickle
+
 from imoocdb.storage.entry import (table_tuple_get_all,
                                    index_tuple_get_range,
                                    index_tuple_get_equal_value,
@@ -8,6 +11,8 @@ from imoocdb.sql.logical_operator import Condition
 from imoocdb.common.fabric import TableColumn
 from imoocdb.catalog.entry import catalog_table, catalog_index
 from imoocdb.errors import ExecutorCheckError
+from imoocdb.constant import TEMP_DIRECTORY
+from imoocdb.session_manager import get_current_session_id
 
 
 def is_condition_true(values: dict, condition):
@@ -210,6 +215,134 @@ class CoveredIndexScan(IndexScan):
         )[0].table_name
 
         for column in catalog_index.select(
-            lambda r: r.index_name == self.index_name
+                lambda r: r.index_name == self.index_name
         )[0].columns:
             self.columns.append(TableColumn(table_name, column))
+
+
+class Sort(PhysicalOperator):
+    INTERNAL_SORT = 'internal sort'
+    EXTERNAL_SORT = 'external sort'
+    HEAP_SORT = 'heap sort'  # 暂时先不实现，只是一个替换排序算法的过程
+
+    def __init__(self, sort_column, asc=True):
+        super().__init__('Sort')
+        self.sort_column = sort_column  # TableColumn 对象
+        self.sort_column_index = None  # sort column 在tuple这种的下标位置
+
+        assert isinstance(self.sort_column, TableColumn)
+        self.asc = asc
+        self.method = self.INTERNAL_SORT  # 默认内排序
+
+        # 物化的二维数组（list of tuple）:
+        self.tuples = []
+
+    def open(self):
+        if len(self.children) != 1:
+            raise ExecutorCheckError(
+                'sort operator only supports one child operator.'
+            )
+
+        child = self.children[0]
+        child.open()
+        self.columns = child.columns  # 这里是一个引用，不是一个copy
+        self.sort_column_index = self.columns.index(self.sort_column)
+
+    def close(self):
+        child = self.children[0]
+        child.close()
+
+    def internal_sort(self):
+        # Python 自带了 sort 排序算法，用到的就是快速排序
+        # 如果想手写，则直接从PPT材料中获取就行，相关材料太多，就不在出浪费大家的时间，
+        # 此处，简单调用即可
+        self.tuples.sort(key=lambda t: t[self.sort_column_index],
+                         reverse=(not self.asc))
+        for tup in self.tuples:
+            yield tup
+
+
+    def external_sort(self):
+        max_part_size = 2
+        chunks = [
+            self.tuples[i: i + max_part_size] for i in range(
+                0, len(self.tuples), max_part_size)
+        ]
+
+        # 下面，我们要进行外排序，即把每个chunk分别排序，部分结果要放到磁盘中进行缓存
+        if not os.path.exists(TEMP_DIRECTORY):
+            os.mkdir(TEMP_DIRECTORY)
+
+        temp_files = []
+        for i, chunk in enumerate(chunks):
+            chunk.sort(
+                key=lambda t: t[self.sort_column_index],
+                reverse=(not self.asc))
+            temp_file = os.path.join(TEMP_DIRECTORY,
+                                     f'temp_sort_{get_current_session_id()}_{i}')
+            with open(temp_file, 'wb') as f:
+                for item in chunk:
+                    f.write(pickle.dumps(item) + b'\n')
+            temp_files.append(temp_file)
+
+        # 接下来，我们处理合并过程 merge
+        file_fds = [open(temp_file, 'rb') for temp_file in temp_files]
+
+        # 此时，我们来获取来自每个chunk的第一个元素，然后把他们进行排序
+        first_items = []
+        # 补偿机制
+        file_fd_index = {}
+        for i, file_fd in enumerate(file_fds):
+            # 序列化，python自带的
+            item = pickle.loads(file_fd.readline())
+            first_items.append(item)
+
+            # 作用：保证，当前 first_items 中每个元素都尽可能从所有chunk中获取
+            # 有了该 file_fd_index 之后，我们就知道当前已经排好序的item是从哪个 fd 中获取的了
+            # 相当于一种反查机制
+            if item not in file_fd_index:
+                file_fd_index[item] = []
+            file_fd_index[item].append(i)
+
+        # merge them
+        first_items.sort(key=lambda t: t[self.sort_column_index],
+                         reverse=(not self.asc))
+        while len(first_items) > 0:
+            item = first_items.pop(0)
+            i = file_fd_index[item].pop(0)
+            if len(file_fd_index[item]) == 0:
+                del file_fd_index[item]  # 对GC友好一点，也不是必须的
+            yield item
+            next_item = file_fds[i].readline()
+            if not next_item:
+                continue
+            # 反序列化
+            next_item = pickle.loads(next_item)
+            first_items.append(next_item)
+            if next_item not in file_fd_index:
+                file_fd_index[next_item] = []
+            file_fd_index[next_item].append(i)
+
+        for file_fd in file_fds:
+            file_fd.close()
+            os.unlink(file_fd.name)
+
+    def next(self):
+        child = self.children[0]
+        # 或者
+        # for child self.children:
+        # 这种for 循环的表现力可能会好点
+
+        # 下面做一下元组的物化过程
+        for tup in child.next():
+            self.tuples.append(tup)
+
+        if self.method == self.INTERNAL_SORT:
+            for tup in self.internal_sort():
+                yield tup
+        elif self.method == self.EXTERNAL_SORT:
+            for tup in self.external_sort():
+                yield tup
+        else:
+            raise NotImplementedError(f'not supported {self.method} yet.')
+

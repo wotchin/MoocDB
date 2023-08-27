@@ -1,6 +1,7 @@
 from imoocdb.executor.operator.physical_operator import (
-    TableScan, IndexScan, CoveredIndexScan
+    TableScan, IndexScan, CoveredIndexScan, Sort
 )
+from imoocdb.common.fabric import TableColumn
 
 from imoocdb.sql.logical_operator import Condition
 from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant
@@ -78,7 +79,19 @@ def test_covered_index_scan():
     assert results == [(1,), ]
 
 
-test_table_scan()
-test_index_scan()
-test_covered_index_scan()
+def test_sort():
+    opt = Sort(TableColumn('t1', 'name'))
+    opt.method = Sort.EXTERNAL_SORT
+    opt.add_child(TableScan('t1'))
+    # 到此位置，这个计划“树”就是：
+    # Sort (sort_column: name)
+    #   -> TableScan (table_name: t1)
+    opt.open()
+    results = list(opt.next())
+    assert results == [(4, 'xiaoguo'), (2, 'xiaohong'), (3, 'xiaoli'), (1, 'xiaoming')]
+    opt.close()
+
+test_sort()
+
+
 
