@@ -220,7 +220,41 @@ class CoveredIndexScan(IndexScan):
             self.columns.append(TableColumn(table_name, column))
 
 
-class Sort(PhysicalOperator):
+class Materialize(PhysicalOperator):
+    def __init__(self, name):
+        super().__init__(name)
+        # 物化的二维数组（list of tuple）:
+        self.tuples = []
+
+    def open(self):
+        if len(self.children) != 1:
+            raise ExecutorCheckError(
+                f'{self.name} operator only supports one child operator.'
+            )
+
+        child = self.children[0]
+        child.open()
+        self.columns = child.columns  # 这里是一个引用，不是一个copy
+
+    def close(self):
+        child = self.children[0]
+        child.close()
+
+    def materialize(self):
+        child = self.children[0]
+        # 或者
+        # for child self.children:
+        # 这种for 循环的表现力可能会好点
+
+        # 下面做一下元组的物化过程
+        for tup in child.next():
+            self.tuples.append(tup)
+
+    def next(self):
+        pass
+
+
+class Sort(Materialize):
     INTERNAL_SORT = 'internal sort'
     EXTERNAL_SORT = 'external sort'
     HEAP_SORT = 'heap sort'  # 暂时先不实现，只是一个替换排序算法的过程
@@ -234,23 +268,9 @@ class Sort(PhysicalOperator):
         self.asc = asc
         self.method = self.INTERNAL_SORT  # 默认内排序
 
-        # 物化的二维数组（list of tuple）:
-        self.tuples = []
-
     def open(self):
-        if len(self.children) != 1:
-            raise ExecutorCheckError(
-                'sort operator only supports one child operator.'
-            )
-
-        child = self.children[0]
-        child.open()
-        self.columns = child.columns  # 这里是一个引用，不是一个copy
+        super().open()
         self.sort_column_index = self.columns.index(self.sort_column)
-
-    def close(self):
-        child = self.children[0]
-        child.close()
 
     def internal_sort(self):
         # Python 自带了 sort 排序算法，用到的就是快速排序
@@ -260,7 +280,6 @@ class Sort(PhysicalOperator):
                          reverse=(not self.asc))
         for tup in self.tuples:
             yield tup
-
 
     def external_sort(self):
         max_part_size = 2
@@ -328,14 +347,7 @@ class Sort(PhysicalOperator):
             os.unlink(file_fd.name)
 
     def next(self):
-        child = self.children[0]
-        # 或者
-        # for child self.children:
-        # 这种for 循环的表现力可能会好点
-
-        # 下面做一下元组的物化过程
-        for tup in child.next():
-            self.tuples.append(tup)
+        self.materialize()
 
         if self.method == self.INTERNAL_SORT:
             for tup in self.internal_sort():
@@ -346,3 +358,65 @@ class Sort(PhysicalOperator):
         else:
             raise NotImplementedError(f'not supported {self.method} yet.')
 
+
+class HashAgg(Materialize):
+    def __init__(self, group_by_column, aggregate_function_name, aggregate_column):
+        super().__init__('HashAgg')
+        self.group_by_column = group_by_column
+        self.aggregate_function_name = aggregate_function_name
+        self.aggregate_column = aggregate_column
+
+        assert isinstance(self.group_by_column, TableColumn)
+        assert isinstance(self.aggregate_column, TableColumn)
+
+        self.group_by_column_idx = None
+        self.aggregate_column_idx = None
+
+        # having 子句，由于我们没有实现这个语法，所以此时不用过滤
+        # 如果实现了having，那么就是 self.having_condition = Condition(...)
+
+        # 额外的信息：
+
+    # override
+    def open(self):
+        super().open()
+
+        self.group_by_column_idx = self.columns.index(self.group_by_column)
+        self.aggregate_column_idx = self.columns.index(self.aggregate_column)
+
+        self.columns = (self.group_by_column, self.aggregate_column)
+
+    @staticmethod
+    def _aggregate_function(name):
+        # 此处也可以用 if - else, 有些语言中的 switch - case
+        return {
+            'count': len,
+            'sum': sum,
+            'max': max,
+            'min': min,
+            'avg': (lambda x: sum(x) / len(x))
+        }[name]
+
+    def next(self):
+        self.materialize()
+
+        # 第一步，先做hash过程
+        # 该哈希表的 key 和 value 形式，大家要记住
+        hash_table = {}
+        for tup in self.tuples:
+            # Python 有更高级的数据类型，如NamedTuple, 此时是最简单粗暴的写法
+            # key 和 value 分别哪里来的，大家要记住，分别是来自哪个列的！
+            key = tup[self.group_by_column_idx]
+            value = tup[self.aggregate_column_idx]
+
+            # 往哈希表里放数据
+            if key not in hash_table:
+                hash_table[key] = [value]
+            else:
+                hash_table[key].append(value)
+
+        # 哈希表构造完毕，接下来对哈希表内部的value进行聚合
+        for key, values in hash_table.items():
+            aggregated_value = self._aggregate_function(
+                self.aggregate_function_name)(values)
+            yield (key, aggregated_value)

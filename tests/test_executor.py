@@ -1,5 +1,5 @@
 from imoocdb.executor.operator.physical_operator import (
-    TableScan, IndexScan, CoveredIndexScan, Sort
+    TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg
 )
 from imoocdb.common.fabric import TableColumn
 
@@ -91,7 +91,22 @@ def test_sort():
     assert results == [(4, 'xiaoguo'), (2, 'xiaohong'), (3, 'xiaoli'), (1, 'xiaoming')]
     opt.close()
 
-test_sort()
+
+def test_hash_agg():
+    opt = HashAgg(group_by_column=TableColumn('t1', 'id'),
+                  aggregate_function_name='count',
+                  aggregate_column=TableColumn('t1', 'name'))
+    opt.add_child(TableScan('t1'))
+    # 到此位置，这个计划“树”就是：
+    # HashAgg (group_column: id, agg_column: name, function: count)
+    #   -> TableScan (table_name: t1)
+    # 相当于执行了:
+    # select count(t1.name) from t1 group by t1.id;
+    opt.open()
+    results = list(opt.next())
+    print(results)
+    # assert results == [(4, 'xiaoguo'), (2, 'xiaohong'), (3, 'xiaoli'), (1, 'xiaoming')]
+    opt.close()
 
 
-
+test_hash_agg()
