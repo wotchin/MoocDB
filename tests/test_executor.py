@@ -124,7 +124,7 @@ def test_cast_tuple_pair_to_values():
 
 def test_nested_loop_join():
     opt = NestedLoopJoin(
-        JoinType.RIGHT_JOIN, 't1', 't2', construct_join_condition('=', 't1.id', 't2.id')
+        JoinType.FULL_JOIN, 't1', 't2', construct_join_condition('=', 't1.id', 't2.id')
     )
     opt.add_child(TableScan('t1'))
     opt.add_child(TableScan('t2'))

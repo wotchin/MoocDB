@@ -19,10 +19,11 @@ mock_table_data = {
     ],
     't2': [
         (1, 'ming', 'BJ'),
-        (2, 'hong', 'SH'),
+        (5, 'hong', 'SH'),
         (3, 'li', 'SZ'),
     ]
 }
+
 
 def table_tuple_get_locations(table_name):
     if table_name == 't1':

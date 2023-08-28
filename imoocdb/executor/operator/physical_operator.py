@@ -519,7 +519,46 @@ class NestedLoopJoin(PhysicalOperator):
             yield tup
 
     def full_join(self):
-        pass
+        padding_nulls_left = tuple([None] * len(self.left_table.columns))
+        padding_nulls_right = tuple([None] * len(self.right_table.columns))
+
+        # 注意：此处是一个物化过程，因为这些元组不止一次被使用，不像上面哪些join类型，
+        # 那些元组只使用一次，因此不需要物化。
+        left_tuples = []
+        right_tuples = []
+        for tup in self.left_table.next():
+            left_tuples.append(tup)
+        for tup in self.right_table.next():
+            right_tuples.append(tup)
+
+        # 下面开始进行Full Join过程
+        for left_tuple in left_tuples:
+            matching_tuples = []
+            for right_tuple in right_tuples:
+                joined_tuple = left_tuple + right_tuple
+                values = cast_tuple_pair_to_values(self.columns, joined_tuple)
+                if is_condition_true(values, self.join_condition):
+                    matching_tuples.append(joined_tuple)
+            # 到此时，相当于做完了内连接
+            # 下面的部分，是左连接部分
+            if not matching_tuples:
+                matching_tuples.append(left_tuple + padding_nulls_right)
+            # 到此时，已经完成了左连接的实现
+            for tup in matching_tuples:
+                yield tup
+
+        # 下面开始做右连接的处理了
+        for right_tuple in right_tuples:
+            not_matched = True
+            for left_tuple in left_tuples:
+                joined_tuple = left_tuple + right_tuple
+                values = cast_tuple_pair_to_values(self.columns, joined_tuple)
+                if is_condition_true(values, self.join_condition):
+                    # 此时，相当于去重，避免两次返回 Inner join 结果
+                    not_matched = False
+                    break
+            if not_matched:
+                yield padding_nulls_left + right_tuple
 
     def next(self):
         if self.join_type == JoinType.CROSS_JOIN:
