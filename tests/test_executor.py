@@ -1,10 +1,11 @@
 from imoocdb.executor.operator.physical_operator import (
-    TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg
+    TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg,
+    cast_tuple_pair_to_values, NestedLoopJoin
 )
 from imoocdb.common.fabric import TableColumn
 
 from imoocdb.sql.logical_operator import Condition
-from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant
+from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant, JoinType
 
 
 def construct_condition(sign, column, value):
@@ -12,6 +13,10 @@ def construct_condition(sign, column, value):
         Identifier(column), Constant(value)))
     return Condition(b)
 
+def construct_join_condition(sign, column1, column2):
+    b = BinaryOperation(op=sign, args=(
+        Identifier(column1), Identifier(column2)))
+    return Condition(b)
 
 def test_table_scan():
     opt = TableScan('t1')
@@ -109,4 +114,23 @@ def test_hash_agg():
     opt.close()
 
 
-test_hash_agg()
+def test_cast_tuple_pair_to_values():
+    columns = (TableColumn('t1', 'id'), TableColumn('t1', 'name'),
+               TableColumn('t2', 'id'), TableColumn('t2', 'name'))
+    tup = (1, 'aaa', 1, 'bbbb')
+    rv = cast_tuple_pair_to_values(columns, tup)
+    assert str(rv) == "{t1.id: 1, t1.name: 'aaa', t2.id: 1, t2.name: 'bbbb'}"
+
+
+def test_nested_loop_join():
+    opt = NestedLoopJoin(
+        JoinType.RIGHT_JOIN, 't1', 't2', construct_join_condition('=', 't1.id', 't2.id')
+    )
+    opt.add_child(TableScan('t1'))
+    opt.add_child(TableScan('t2'))
+    opt.open()
+    print((list(opt.next())))
+    opt.close()
+
+test_nested_loop_join()
+

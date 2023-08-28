@@ -13,6 +13,7 @@ from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
 from imoocdb.errors import ExecutorCheckError
 from imoocdb.constant import TEMP_DIRECTORY
 from imoocdb.session_manager import get_current_session_id
+from imoocdb.sql.parser.ast import JoinType
 
 
 def is_condition_true(values: dict, condition):
@@ -30,6 +31,13 @@ def is_condition_true(values: dict, condition):
         return left != right
     else:
         raise NotImplementedError()
+
+
+def cast_tuple_pair_to_values(columns, tup):
+    rv = {}
+    for k, v in zip(columns, tup):
+        rv[k] = v
+    return rv
 
 
 class PhysicalOperator:
@@ -117,7 +125,8 @@ class TableScan(PhysicalOperator):
                 # 获取到的元组是 (1, 'xiaoming')
                 # 则，我们可以构造出 values 为 {TableColumn(t1, id): 1,
                 #                             TableColumn(t1, name): 'xiaoming'}
-                values = {k: tup[i] for i, k in enumerate(self.columns)}
+                # values = {k: tup[i] for i, k in enumerate(self.columns)}, 等价于
+                values = cast_tuple_pair_to_values(self.columns, tup)
                 if is_condition_true(values, self.condition):
                     yield tup
 
@@ -417,3 +426,114 @@ class HashAgg(Materialize):
             aggregated_value = self._aggregate_function(
                 self.aggregate_function_name)(values)
             yield (key, aggregated_value)
+
+
+class NestedLoopJoin(PhysicalOperator):
+    def __init__(self, join_type: str, left_table_name, right_table_name, join_condition):
+        super().__init__('NestedLoopJoin')
+        self.join_type = join_type
+        self.left_table_name = left_table_name
+        self.right_table_name = right_table_name
+        self.join_condition = join_condition
+
+    def open(self):
+        assert len(self.children) == 2
+        for child in self.children:
+            child.open()
+
+        self.columns = self.left_table.columns + self.right_table.columns
+
+    def close(self):
+        for child in self.children:
+            child.close()
+
+    @property
+    def left_table(self):
+        assert self.children[0].columns[0].table_name == self.left_table_name
+        # 在我们的代码里，只支持两个表join，我们的Join算子的子节点，只能是 scan
+        # 等价于：
+        # assert self.children[0].table_name == self.left_table_name
+        return self.children[0]
+
+    @property
+    def right_table(self):
+        assert self.children[1].columns[1].table_name == self.right_table_name
+        return self.children[1]
+
+    def cross_join(self):
+        # 我们前面说过，笛卡尔积就是cross join, 就是两个简单的，没有判断条件的
+        # for 循环，不考虑其他I/O代价，索引代价等，其算法复杂度是 O(M * N)
+        for left_tuple in self.left_table.next():  # 在循环外面的是外表
+            for right_tuple in self.right_table.next():  # 里面的是内表
+                yield left_tuple + right_tuple
+
+    def inner_join(self):
+        for tup in self.cross_join():
+            values = cast_tuple_pair_to_values(self.columns, tup)
+            if is_condition_true(values, self.join_condition):
+                yield tup
+
+    def outer_join(self, outer_table, inner_table, exchange=False):
+        # None 用来表示 null
+        # 没有 exchange 之前，outer_table 就是 left_table
+        if not exchange:
+            padding_nulls = tuple(None for _ in range(len(inner_table.columns)))
+        else:
+            padding_nulls = tuple(None for _ in range(len(outer_table.columns)))
+
+        for outer_tuple in outer_table.next():
+            matching_tuples = []
+            for inner_tuple in inner_table.next():
+                if not exchange:
+                    joined_tuple = outer_tuple + inner_tuple
+                else:
+                    joined_tuple = inner_tuple + outer_tuple
+                values = cast_tuple_pair_to_values(self.columns, joined_tuple)
+                if is_condition_true(values, self.join_condition):
+                    matching_tuples.append(joined_tuple)
+
+            if not matching_tuples:
+                if not exchange:
+                    matching_tuples.append(outer_tuple + padding_nulls)
+                else:
+                    matching_tuples.append(padding_nulls + outer_tuple)
+
+            for tup in matching_tuples:
+                yield tup
+
+    def left_join(self):
+        # 左连接和右连接是等价的，例如
+        # t1 left join t2 等价于 t2 right join t1
+        # 再强调一下：正常模式下 （没有exchange）outer table 就是 left table
+        for tup in self.outer_join(outer_table=self.left_table,
+                                   inner_table=self.right_table,
+                                   exchange=False):
+            yield tup
+
+    def right_join(self):
+        # 左连接和右连接是等价的，例如
+        # t1 left join t2 等价于 t2 right join t1
+        for tup in self.outer_join(outer_table=self.right_table,
+                                   inner_table=self.left_table,
+                                   exchange=True):
+            yield tup
+
+    def full_join(self):
+        pass
+
+    def next(self):
+        if self.join_type == JoinType.CROSS_JOIN:
+            generator = self.cross_join()
+        elif self.join_type == JoinType.INNER_JOIN:
+            generator = self.inner_join()
+        elif self.join_type == JoinType.LEFT_JOIN:
+            generator = self.left_join()
+        elif self.join_type == JoinType.RIGHT_JOIN:
+            generator = self.right_join()
+        elif self.join_type == JoinType.FULL_JOIN:
+            generator = self.full_join()
+        else:
+            raise NotImplementedError(f'not supported {self.join_type}.')
+
+        for tup in generator:
+            yield tup

@@ -10,20 +10,28 @@ def table_tuple_get_all(table_name):
         yield table_tuple_get_one(table_name, location)
 
 
+mock_table_data = {
+    't1': [
+        (1, 'xiaoming'),
+        (2, 'xiaohong'),
+        (3, 'xiaoli'),
+        (4, 'xiaoguo'),
+    ],
+    't2': [
+        (1, 'ming', 'BJ'),
+        (2, 'hong', 'SH'),
+        (3, 'li', 'SZ'),
+    ]
+}
+
 def table_tuple_get_locations(table_name):
-    return [0, 1, 2, 3]
+    if table_name == 't1':
+        return [0, 1, 2, 3]
+    elif table_name == 't2':
+        return [0, 1, 2]
 
 
 def table_tuple_get_one(table_name, location):
-    mock_table_data = {
-        't1': [
-            (1, 'xiaoming'),
-            (2, 'xiaohong'),
-            (3, 'xiaoli'),
-            (4, 'xiaoguo'),
-        ]
-    }
-
     return mock_table_data[table_name][location]
 
 
