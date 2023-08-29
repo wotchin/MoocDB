@@ -13,10 +13,12 @@ def construct_condition(sign, column, value):
         Identifier(column), Constant(value)))
     return Condition(b)
 
+
 def construct_join_condition(sign, column1, column2):
     b = BinaryOperation(op=sign, args=(
         Identifier(column1), Identifier(column2)))
     return Condition(b)
+
 
 def test_table_scan():
     opt = TableScan('t1')
@@ -132,5 +134,5 @@ def test_nested_loop_join():
     print((list(opt.next())))
     opt.close()
 
-test_nested_loop_join()
 
+test_nested_loop_join()

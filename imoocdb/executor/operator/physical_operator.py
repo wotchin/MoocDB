@@ -1,5 +1,6 @@
 import os
 import pickle
+import time
 
 from imoocdb.storage.entry import (table_tuple_get_all,
                                    index_tuple_get_range,
@@ -576,3 +577,41 @@ class NestedLoopJoin(PhysicalOperator):
 
         for tup in generator:
             yield tup
+
+
+class PhysicalQuery(PhysicalOperator):
+    def __init__(self):
+        """
+        该物理算子相当于一个dummy, 相当于一种编程技巧，
+        但是我们给他找点活干，让他帮忙记录一下执行阶段的信息，
+        如执行耗时等等
+        """
+        super().__init__('Result')
+        self.open_time = 0
+        self.close_time = 0
+        self.actual_rows = 0
+
+    def open(self):
+        # 这个获取时间戳的好处是，获取单调时间戳，可以忽略操作系统上
+        # 用户手动修改时间的影响
+        self.open_time = time.monotonic()
+
+        for child in self.children:
+            child.open()
+
+    def close(self):
+        for child in self.children:
+            child.close()
+        self.close_time = time.monotonic()
+
+    def next(self):
+        for child in self.children:
+            self.actual_rows += 1
+            for tup in child.next():
+                yield tup
+
+    @property
+    def elapsed_time(self):
+        # 执行阶段的总耗时
+        return self.close_time - self.open_time
+

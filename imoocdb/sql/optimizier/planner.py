@@ -1,8 +1,11 @@
+from typing import Union
+
 from imoocdb.common.fabric import TableColumn, FunctionColumn
 from imoocdb.errors import SQLLogicalPlanError
 from imoocdb.sql.parser.ast import *
 from imoocdb.sql.logical_operator import *
 from imoocdb.catalog import catalog_table, catalog_function
+from imoocdb.executor.operator.physical_operator import *
 
 
 # 可以用于判断表或者列是否存在，用于检验输入SQL语句的合法性
@@ -294,7 +297,7 @@ class SelectTransformer:
 
     @staticmethod
     def transform(ast: Select):
-        query = Query([])
+        query = Query(Query.SELECT)
         SelectTransformer.transform_clause_from(ast, query)
         SelectTransformer.transform_target_list(ast, query)
         SelectTransformer.transform_clause_where(ast, query)
@@ -315,9 +318,150 @@ def query_logical_plan(ast: ASTNode) -> LogicalOperator:
         raise NotImplementedError('not supported non-select statement yet.')
 
 
-def query_physical_plan(logical_plan: LogicalOperator) -> "PlanTree":
-    pass
+# implementation 表示将逻辑计划转换为物理计划
+# select 表示针对SELECT语句
+class SelectImplementation:
+    @staticmethod
+    def implement_scan(node) -> Union[TableScan, IndexScan, CoveredIndexScan]:
+        # 返回的应该是 TableScan, IndexScan 或者 CoveredIndexScan的一个
+        # 我们此处定义一个rule:
+        # 有索引，优先用索引，如果这个索引可以用覆盖索引，那么优先用覆盖索引
+        results = catalog_index.select(lambda r: r.table_name == node.table_name)
+        if len(results) == 0:
+            # 用一个 “卫语句” 来返回一个case, 就是对应的表，没有索引的情况
+            # 直接返回表扫描即可
+            return TableScan(node.table_name, node.condition)
+
+        # 大于0，代表有索引，我们开始尝试使用索引
+        # 我们来判断下索引，能否使用
+        # rule: 假如有多个索引，我们选择列数最少的那个使用
+        # 但是，这里面有个前提，是列能符合最左匹配原则
+        candidate_indexes = []
+        condition_columns = []
+        if isinstance(node.condition.left, TableColumn):
+            condition_columns.append(node.condition.left)
+        if isinstance(node.condition.right, TableColumn):
+            condition_columns.append(node.condition.right)
+        if len(condition_columns) >= 2:
+            raise NotImplementedError(f'not supported multi-columns predicates.')
+
+        # 这种边界场景: select t1.a from t1 where 1 > 2;
+        if len(condition_columns) == 0:
+            return TableScan(node.table_name, node.condition)
+        # 下面，我们来找 condition_columns 与 results 中的索引列能匹配上的，
+        # 如果匹配上了，则放到 candidate_indexes, 供我们后面进一步筛选
+        for catalog_index_form in results:
+            # 下面这块的逻辑，就是在验证最左匹配原则，
+            # 例如索引包含了多个列 index(t1.a, t1.b, t1.c)
+            # 而我们的谓词predicate在下面几个例子上，分别为：
+            # 包含了 t1.a --> 符合
+            # 包含了 t1.a, t1.b --> 符合
+            # 包含了 t1.b, t1.a --> 不符合
+            matched = True
+            for condition_column in condition_columns:
+                for index_column in catalog_index_form.columns:
+                    if condition_column.column_name != index_column:
+                        matched = False
+                        break
+            if matched:
+                candidate_indexes.append(catalog_index_form)
+
+        # 什么都匹配不到，没有可用的索引，那么要表扫描
+        if not candidate_indexes:
+            return TableScan(node.table_name, node.condition)
+
+        # 接下来，从这里面挑选最合适的一个索引
+        # 如果，这个query中所涉及到的列，都涵盖在这个索引里面了，那么我们
+        # 使用覆盖索引，否则，找在candidate_indexes索引列最短的那个使用。
+        for candidate_index in candidate_indexes:
+            if len(node.columns) == len(candidate_index.columns):
+                # 此时，应该使用覆盖索引
+                return CoveredIndexScan(
+                    index_name=candidate_index.index_name,
+                    condition=node.condition
+                )
+
+        shortest_index = candidate_indexes[0]
+        for candidate_index in candidate_indexes:
+            # if shortest_index is None:
+            #     shortest_index = candidate_index
+            #     # continue 可写可不写
+            if len(candidate_index.columns) < len(shortest_index.columns):
+                shortest_index = candidate_index
+
+        return IndexScan(index_name=shortest_index.index_name, condition=node.condition)
 
 
-def query_plan(ast: ASTNode) -> "PlanTree":
+    @staticmethod
+    def implement_sort(node) -> Sort:
+        # 可以优化的点：
+        # 默认是内排序，如果我们有参数设置的话，可以在此处做一个判断，如果超了预估
+        # 的内存使用（排序行数），那么就使用外排序
+        return Sort(
+            node.sort_column,
+            asc=node.asc
+        )
+
+    @staticmethod
+    def implement_agg(node) -> HashAgg:
+        return HashAgg(
+            node.group_by_column,
+            node.aggregate_function_name,
+            node.aggregate_column
+        )
+
+    @staticmethod
+    def implement_join(node) -> NestedLoopJoin:
+        # 可以优化的点：
+        # 虽然说，我们只支持两个节点进行Join, 但是它们的顺序（内外表）也是
+        # 也是可以优化的点
+        return NestedLoopJoin(
+            node.join_type, node.left_table_name,
+            node.right_table_name, node.join_condition
+        )
+
+    @staticmethod
+    def implement(node):
+        # 这里是通过先递归逻辑执行计划树，然后产生
+        # 与之对应的物理执行计划树
+        if node is None:
+            return None
+
+        if isinstance(node, ScanOperator):
+            physical_node = SelectImplementation.implement_scan(node)
+        elif isinstance(node, SortOperator):
+            physical_node = SelectImplementation.implement_sort(node)
+        elif isinstance(node, GroupOperator):
+            physical_node = SelectImplementation.implement_agg(node)
+        elif isinstance(node, JoinOperator):
+            physical_node = SelectImplementation.implement_join(node)
+        elif isinstance(node, Query):
+            physical_node = PhysicalQuery()
+        else:
+            raise NotImplementedError(f'not supported this type of node {node}.')
+
+        if len(node.children) == 0:
+            return physical_node
+
+        for child in node.children:
+            physical_node.add_child(SelectImplementation.implement(child))
+
+        return physical_node
+
+
+def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
+    if isinstance(logical_plan, Query):
+        if logical_plan.query_type == Query.SELECT:
+            return SelectImplementation.implement(logical_plan)
+        else:
+            raise NotImplementedError(
+                f'not supported this query type {logical_plan.query_type}.'
+            )
+    else:
+        raise NotImplementedError(
+            'not supported this logical plan.'
+        )
+
+
+def query_plan(ast: ASTNode) -> "PhysicalOperator":
     pass

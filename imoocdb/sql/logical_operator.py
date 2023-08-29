@@ -1,6 +1,7 @@
 import logging
 
 from imoocdb.common.fabric import TableColumn
+from imoocdb.catalog.entry import catalog_table
 
 from .parser.ast import BinaryOperation, FunctionOperation, Identifier, Constant
 
@@ -32,7 +33,8 @@ class ScanOperator(LogicalOperator):
         self.table_name = table_name
         # todo:
         # 如果这个columns是可以裁剪的，此处返回被裁减后的列数组
-        self.columns = None
+        self.columns = catalog_table.select(
+            lambda r: r.table_name == table_name)[0].columns
         # 注意：关于扫描表，应该扫描哪些字段，是否需要提前进行
         # 列裁剪，应该有对应的字段进行承载
         self.condition = None
@@ -115,10 +117,17 @@ class JoinOperator(LogicalOperator):
 class Query(LogicalOperator):
     """包含projection投影信息，兼职封装了逻辑执行计划，是逻辑执行计划的
     树的根节点"""
+    SELECT = 'select'
+    DELETE = 'delete'
+    INSERT = 'insert'
+    UPDATE = 'update'
 
-    def __init__(self, projection_columns: list):
+    def __init__(self, query_type: str):
         super().__init__('Query')  # Projection
-        self.project_columns = projection_columns
+        self.query_type = query_type
+        assert query_type in (self.SELECT, self.DELETE, self.INSERT, self.UPDATE)
+
+        self.project_columns = []
         # 有些“缓存”信息，可以放到这里面，便于加快后面的执行效果
         self.scan_operators = []
         self.where_condition = None

@@ -78,6 +78,8 @@ def index_tuple_get_range(index_name, start=None, end=None):
 def index_tuple_get_equal_value(index_name, equal_value):
     results = catalog_index.select(lambda r: r.index_name == index_name)
     table_name = results[0].table_name
+    if equal_value not in mock_idx[index_name]:
+        return ()
     for location in mock_idx[index_name][equal_value]:
         yield table_tuple_get_one(table_name, location)
 
