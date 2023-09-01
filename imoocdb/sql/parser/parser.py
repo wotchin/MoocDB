@@ -1,6 +1,8 @@
 import re
 import sly
 
+from imoocdb.errors import NoticeError
+
 
 # select a, b from t1;
 # select a, b from t1 where a > c;
@@ -391,8 +393,13 @@ class SQLParser(sly.Parser):
             raise SyntaxError("Syntax error at end of file.")
 
 
+lexer = SQLLexer()
+parser = SQLParser()
+
+
 def query_parse(sql_stmt):
-    lexer = SQLLexer()
-    parser = SQLParser()
-    tokens = lexer.tokenize(sql_stmt)
-    return parser.parse(tokens)
+    try:
+        tokens = lexer.tokenize(sql_stmt)
+        return parser.parse(tokens)
+    except (sly.lex.LexError, SyntaxError) as e:
+        raise NoticeError(e)

@@ -590,6 +590,7 @@ class PhysicalQuery(PhysicalOperator):
         self.open_time = 0
         self.close_time = 0
         self.actual_rows = 0
+        self.projection_column_ids = []
 
     def open(self):
         # 这个获取时间戳的好处是，获取单调时间戳，可以忽略操作系统上
@@ -598,6 +599,13 @@ class PhysicalQuery(PhysicalOperator):
 
         for child in self.children:
             child.open()
+
+        # 遍历要输出的列，寻找子节点中对应的下标位置
+        child_columns = self.children[0].columns  # 子节点返回的所有列信息
+        for target_column in self.columns:
+            for j, child_column in enumerate(child_columns):
+                if target_column == child_column:
+                    self.projection_column_ids.append(j)
 
     def close(self):
         for child in self.children:
@@ -608,10 +616,10 @@ class PhysicalQuery(PhysicalOperator):
         for child in self.children:
             self.actual_rows += 1
             for tup in child.next():
-                yield tup
+                # 要做没有用的列的删除，即投影操作
+                yield tuple(tup[i] for i in self.projection_column_ids)
 
     @property
     def elapsed_time(self):
         # 执行阶段的总耗时
         return self.close_time - self.open_time
-

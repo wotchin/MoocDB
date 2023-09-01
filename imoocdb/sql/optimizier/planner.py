@@ -57,8 +57,8 @@ class SelectTransformer:
     @staticmethod
     def transform_target_list(ast, query):
         """处理投影projection部分"""
-        target_list = []
         for target in ast.targets:
+            target_list = []
             if isinstance(target, Star):
                 # 这个过程完成的是 * 的解析
                 for scan_operator in query.scan_operators:
@@ -327,7 +327,7 @@ class SelectImplementation:
         # 我们此处定义一个rule:
         # 有索引，优先用索引，如果这个索引可以用覆盖索引，那么优先用覆盖索引
         results = catalog_index.select(lambda r: r.table_name == node.table_name)
-        if len(results) == 0:
+        if len(results) == 0 or not node.condition:
             # 用一个 “卫语句” 来返回一个case, 就是对应的表，没有索引的情况
             # 直接返回表扫描即可
             return TableScan(node.table_name, node.condition)
@@ -437,6 +437,9 @@ class SelectImplementation:
             physical_node = SelectImplementation.implement_join(node)
         elif isinstance(node, Query):
             physical_node = PhysicalQuery()
+            # 此时，是最终要输出的所有列
+            # 在这里，要对下面返回来的列，做裁剪（投影，也就是删除没有的列）
+            physical_node.columns = node.project_columns
         else:
             raise NotImplementedError(f'not supported this type of node {node}.')
 
@@ -464,4 +467,5 @@ def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
 
 
 def query_plan(ast: ASTNode) -> "PhysicalOperator":
-    pass
+    logical_plan = query_logical_plan(ast)
+    return query_physical_plan(logical_plan)
