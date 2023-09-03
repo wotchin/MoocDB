@@ -355,9 +355,9 @@ class SQLParser(sly.Parser):
         return params
 
     # update t1 set a = 1;
-    @_('id EQ expr')
+    @_('expr EQ expr')
     def update_parameter(self, p):
-        return {p.id: p.expr}
+        return {p.expr0: p.expr1}
 
     # delete 语句
     @_('DELETE FROM from_table WHERE expr',

@@ -2,19 +2,23 @@ import os
 import pickle
 import time
 
+from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
+from imoocdb.common.fabric import TableColumn
+from imoocdb.constant import TEMP_DIRECTORY
+from imoocdb.errors import ExecutorCheckError, RollbackError
+from imoocdb.session_manager import get_current_session_id
+from imoocdb.sql.logical_operator import *
+from imoocdb.sql.parser.ast import JoinType
 from imoocdb.storage.entry import (table_tuple_get_all,
-                                   index_tuple_get_range,
-                                   index_tuple_get_equal_value,
+                                   table_tuple_insert_one,
                                    covered_index_tuple_get_range,
                                    covered_index_tuple_get_equal_value,
-                                   )
-from imoocdb.sql.logical_operator import Condition
-from imoocdb.common.fabric import TableColumn
-from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
-from imoocdb.errors import ExecutorCheckError
-from imoocdb.constant import TEMP_DIRECTORY
-from imoocdb.session_manager import get_current_session_id
-from imoocdb.sql.parser.ast import JoinType
+                                   index_tuple_insert_one,
+                                   index_tuple_delete_one,
+                                   index_tuple_update_one,
+                                   index_tuple_get_equal_value_locations, index_tuple_get_range_locations,
+                                   table_tuple_get_one, table_tuple_get_all_locations, table_tuple_update_one,
+                                   table_tuple_delete_multiple)
 
 
 def is_condition_true(values: dict, condition):
@@ -131,16 +135,27 @@ class TableScan(PhysicalOperator):
                 if is_condition_true(values, self.condition):
                     yield tup
 
+    def next_location(self):
+        for location in table_tuple_get_all_locations(self.table_name):
+            tup = table_tuple_get_one(self.table_name, location)
+            if not self.condition:
+                yield location
+            else:
+                values = cast_tuple_pair_to_values(self.columns, tup)
+                if is_condition_true(values, self.condition):
+                    yield location
+
 
 class IndexScan(PhysicalOperator):
     def __init__(self, index_name, condition=None):
         super().__init__('IndexScan')
         self.index_name = index_name
+        self.table_name = None  # 该索引涉及到的表名
         self.condition = condition
         self.condition_column = None
         self.constant = None
-        self.tuple_get_equal_value = index_tuple_get_equal_value
-        self.tuple_get_range = index_tuple_get_range
+        self.tuple_get_equal_value = index_tuple_get_equal_value_locations
+        self.tuple_get_range = index_tuple_get_range_locations
 
     def open(self):
         constants = []
@@ -162,24 +177,24 @@ class IndexScan(PhysicalOperator):
     def fill_in_columns(self):
         # 采集上来的元组tuple结构
         self.columns = []
-        table_name = catalog_index.select(
+        self.table_name = catalog_index.select(
             lambda r: r.index_name == self.index_name
         )[0].table_name
         for column in catalog_table.select(
-                lambda r: r.table_name == table_name)[0].columns:
-            self.columns.append(TableColumn(table_name, column))
+                lambda r: r.table_name == self.table_name)[0].columns:
+            self.columns.append(TableColumn(self.table_name, column))
 
     def close(self):
         pass
 
-    def next(self):
+    def next_location(self):
         if not self.condition:
             raise NotImplementedError()
         elif self.condition.sign == '=':
-            for tup in self.tuple_get_equal_value(
+            for location in self.tuple_get_equal_value(
                     self.index_name, equal_value=(self.constant,)
             ):
-                yield tup
+                yield location
         elif self.condition.sign == '>':
             # eg, ... where t1.a > 100
             # 等价于 ... where 100 < t1.a
@@ -189,10 +204,10 @@ class IndexScan(PhysicalOperator):
             else:
                 end = (self.constant,)
 
-            for tup in self.tuple_get_range(
+            for location in self.tuple_get_range(
                     self.index_name, start=start, end=end
             ):
-                yield tup
+                yield location
         elif self.condition.sign == '<':
             # eg, ... t1.a < 100
             start = end = None
@@ -200,14 +215,18 @@ class IndexScan(PhysicalOperator):
                 end = (self.constant,)
             else:
                 start = (self.constant,)
-            for tup in self.tuple_get_range(
+            for location in self.tuple_get_range(
                     self.index_name, start=start, end=end
             ):
-                yield tup
+                yield location
         else:
             raise NotImplementedError(
                 f'not supported operation {self.condition.sign} for {self.name}'
             )
+
+    def next(self):
+        for location in self.next_location():
+            yield table_tuple_get_one(self.table_name, location)
 
 
 class CoveredIndexScan(IndexScan):
@@ -217,17 +236,37 @@ class CoveredIndexScan(IndexScan):
         self.tuple_get_equal_value = covered_index_tuple_get_equal_value
         self.tuple_get_range = covered_index_tuple_get_range
 
-    def fill_in_columns(self):
-        # 采集上来的元组tuple结构，就是index的column结构
-        self.columns = []
-        table_name = catalog_index.select(
-            lambda r: r.index_name == self.index_name
-        )[0].table_name
+    def next(self):
+        # 覆盖索引扫描的返回的就是key, 可以直接返回给上层算子了
+        for key in self.next_location():
+            yield key
 
-        for column in catalog_index.select(
-                lambda r: r.index_name == self.index_name
-        )[0].columns:
-            self.columns.append(TableColumn(table_name, column))
+
+class LocationScan(PhysicalOperator):
+    def __init__(self, scan):
+        super().__init__('LocationScan')
+        # 该类是个代理类，真正执行扫描动作的是下面的 real_scan 算子
+        # real_scan 算子可以是 IndexScan/TableScan, 但是调用的不是它们的
+        # next() 方法，而是 next_location() 方法。
+        assert isinstance(scan, IndexScan) or isinstance(scan, TableScan)
+        self.real_scan = scan
+
+    def open(self):
+        self.columns = []  # nothing to return
+        self.real_scan.open()
+
+    def close(self):
+        self.real_scan.close()
+
+    def next(self):
+        locations = []
+        for location in self.real_scan.next_location():
+            locations.append(location)
+        # 这里缓存一下，是为了避免被删除元素之后，由于 next_location() 是动态
+        # 获取下标的，tuple 下标会发生位置变换（例如 -1），
+        # 导致后续扫描失败
+        for location in locations:
+            yield location
 
 
 class Materialize(PhysicalOperator):
@@ -623,3 +662,212 @@ class PhysicalQuery(PhysicalOperator):
     def elapsed_time(self):
         # 执行阶段的总耗时
         return self.close_time - self.open_time
+
+
+class PhysicalInsert(PhysicalOperator):
+    def __init__(self, logical_operator: InsertOperator):
+        super().__init__('Insert')
+        self.logical_operator = logical_operator
+        self.column_ids = []
+        self.table_column_num = 0
+        self.indexes = None
+
+    def open(self):
+        all_columns = catalog_table.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )[0].columns
+        for i, column in enumerate(all_columns):
+            for table_column in self.logical_operator.columns:
+                if column == table_column.column_name:
+                    self.column_ids.append(i)
+        self.table_column_num = len(all_columns)
+        if len(self.column_ids) != len(self.logical_operator.columns) or (
+                len(self.column_ids) > self.table_column_num
+        ):
+            raise ExecutorCheckError(f'error caused by columns.')
+
+        # 遍历所有涉及到的索引,后面也要同步更新他
+        indexes = catalog_index.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )
+        self.indexes = []
+        for index_form in indexes:
+            index_name = index_form.index_name
+            column_ids = []
+            for column_name in index_form.columns:
+                column_ids.append(all_columns.index(column_name))
+            self.indexes.append(
+                dict(index_name=index_name, column_ids=column_ids)
+            )
+
+    def close(self):
+        pass
+
+    @staticmethod
+    def _pad_null(tup, set_ids, total_length):
+        full_tuple = [None] * total_length
+        for i, value in zip(set_ids, tup):
+            full_tuple[i] = value
+        return tuple(full_tuple)
+
+    def next(self):
+        for tup in self.logical_operator.values:
+            # 更新基础数据表
+            location = table_tuple_insert_one(
+                self.logical_operator.table_name, self._pad_null(
+                    tup, self.column_ids, self.table_column_num
+                )
+            )
+            # 同步更新所有涉及到的索引
+            if not location:
+                # 出现问题了，要回滚！
+                raise RollbackError(
+                    f'cannot insert data into the table {self.logical_operator.table_name}.'
+                )
+
+            for index_info in self.indexes:
+                index_tuple_insert_one(
+                    index_info['index_name'],
+                    key=self._pad_null(
+                        tup, index_info['column_ids'], len(index_info['column_ids'])),
+                    value=location)
+                yield
+
+
+class PhysicalUpdate(PhysicalOperator):
+    def __init__(self, logical_operator: UpdateOperator):
+        super().__init__('Update')
+        self.logical_operator = logical_operator
+        self.column_ids = []
+        self.table_column_num = 0
+        self.indexes = None
+
+    def open(self):
+        all_columns = catalog_table.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )[0].columns
+        for i, column in enumerate(all_columns):
+            for table_column in self.logical_operator.columns:
+                if column == table_column.column_name:
+                    self.column_ids.append(i)
+        self.table_column_num = len(all_columns)
+        if len(self.column_ids) != len(self.logical_operator.columns) or (
+                len(self.column_ids) > self.table_column_num
+        ):
+            raise ExecutorCheckError(f'error caused by columns.')
+
+        # 遍历所有涉及到的索引,后面也要同步更新他
+        indexes = catalog_index.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )
+        self.indexes = []
+        for index_form in indexes:
+            index_name = index_form.index_name
+            column_ids = []
+            for column_name in index_form.columns:
+                column_ids.append(all_columns.index(column_name))
+            self.indexes.append(
+                dict(index_name=index_name, column_ids=column_ids)
+            )
+
+        # Update 是有子节点的，他的子节点就是Scan算子，不同于select
+        # 语句，这个Scan算子返回的是位置 location, 可以用于更新
+        assert len(self.children) == 1
+        assert isinstance(self.children[0], LocationScan)
+        for child in self.children:
+            child.open()
+
+    def close(self):
+        for child in self.children:
+            child.close()
+
+    def _update_from_old_tuple(self, old_tuple):
+        new_tuple = list(old_tuple)
+        for i, value in zip(self.column_ids, self.logical_operator.values):
+            new_tuple[i] = value
+        assert len(new_tuple) == self.table_column_num
+        return tuple(new_tuple)
+
+    def next(self):
+        # 该节点只有一个子节点，该写法等效于
+        # `for location in self.children[0].next_location()`
+        for child in self.children:
+            for location in child.next():
+                if not location:
+                    # 出现问题了，要回滚！
+                    raise RollbackError(
+                        f'cannot update data for the table {self.logical_operator.table_name}.'
+                    )
+
+                old_tuple = table_tuple_get_one(self.logical_operator.table_name,
+                                                location)
+                new_tuple = self._update_from_old_tuple(old_tuple)
+                new_location = table_tuple_update_one(
+                    self.logical_operator.table_name,
+                    location,
+                    new_tuple
+                )
+                # 同步更新所有涉及到的索引
+                for index_info in self.indexes:
+                    key = tuple(new_tuple[i] for i in index_info['column_ids'])
+                    index_tuple_update_one(
+                        index_info['index_name'],
+                        key=key,
+                        old_value=location,
+                        value=new_location
+                    )
+
+                yield
+
+
+class PhysicalDelete(PhysicalOperator):
+    def __init__(self, logical_operator: DeleteOperator):
+        super().__init__('Insert')
+        self.logical_operator = logical_operator
+        self.indexes = None
+
+    def open(self):
+        all_columns = catalog_table.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )[0].columns
+
+        # 遍历所有涉及到的索引,后面也要同步更新他
+        indexes = catalog_index.select(
+            lambda r: r.table_name == self.logical_operator.table_name
+        )
+        self.indexes = []
+        for index_form in indexes:
+            index_name = index_form.index_name
+            column_ids = []
+            for column_name in index_form.columns:
+                column_ids.append(all_columns.index(column_name))
+            self.indexes.append(
+                dict(index_name=index_name, column_ids=column_ids)
+            )
+
+        # Delete 是有子节点的，他的子节点就是Scan算子，不同于select
+        # 语句，这个Scan算子返回的是位置 location, 可以用于更新
+        assert len(self.children) == 1
+        assert isinstance(self.children[0], LocationScan)
+        for child in self.children:
+            child.open()
+
+    def close(self):
+        for child in self.children:
+            child.close()
+
+    def next(self):
+        locations = []
+        for child in self.children:
+            for location in child.next():
+                old_tuple = table_tuple_get_one(self.logical_operator.table_name,
+                                                location)
+                yield
+                locations.append(location)
+                for index_info in self.indexes:
+                    index_name = index_info['index_name']
+                    key = tuple(old_tuple[i] for i in index_info['column_ids'])
+                    index_tuple_delete_one(index_name, key=key, location=location)
+
+        table_tuple_delete_multiple(self.logical_operator.table_name,
+                                    locations)

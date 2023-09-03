@@ -42,4 +42,21 @@ def test_logical_plan():
     assert explain(query) == ['Query', '   -> Group', '     -> Scan']
 
 
-test_logical_plan()
+def test_dml_logical_plan():
+    ast = query_parse("insert into t1 values (1, 'abc'), (2, 'def')")
+    plan = query_logical_plan(ast)
+    assert explain(plan) == ['Insert']
+    assert plan.table_name == 't1'
+    assert plan.values == [[1, 'abc'], [2, 'def']]
+
+    ast = query_parse("delete from t1 where t1.id = 1")
+    plan = query_logical_plan(ast)
+    assert explain(plan) == ['Delete']
+
+    ast = query_parse("update t1 set t1.name = 'hello' where t1.id = 1")
+    plan = query_logical_plan(ast)
+    # assert explain(plan) == ['Delete']
+    print(explain(plan))
+
+
+test_dml_logical_plan()

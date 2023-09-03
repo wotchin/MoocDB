@@ -1,4 +1,5 @@
 from imoocdb.sql.parser.parser import query_parse
+from imoocdb.errors import NoticeError
 
 
 def test_parse_select_statement():
@@ -10,7 +11,7 @@ def test_parse_select_statement():
     ast = query_parse('select a, count(a) from t1 group by a where b > 100')
     try:
         query_parse('select a, b from t1 order by b order by a')
-    except SyntaxError:
+    except NoticeError:
         pass
     else:
         raise AssertionError('should raise an exception.')

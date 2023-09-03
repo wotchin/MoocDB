@@ -13,7 +13,7 @@ class Result:
 
     def to_pretty_string(self):
         if not self.target_columns:
-            return '(Rows 0)'
+            return f'(Rows {len(self.rows)})'
         field_names = [str(column) for column in self.target_columns]
         p = prettytable.PrettyTable(field_names=field_names)
         for r in self.rows:

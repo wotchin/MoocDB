@@ -1,11 +1,14 @@
 from imoocdb.executor.operator.physical_operator import (
     TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg,
-    cast_tuple_pair_to_values, NestedLoopJoin
-)
+    cast_tuple_pair_to_values, NestedLoopJoin,
+    PhysicalInsert, PhysicalDelete, PhysicalUpdate,
+    LocationScan)
 from imoocdb.common.fabric import TableColumn
 
-from imoocdb.sql.logical_operator import Condition
+from imoocdb.sql.logical_operator import (
+    Condition, InsertOperator, UpdateOperator, DeleteOperator)
 from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant, JoinType
+from imoocdb.storage.entry import table_tuple_get_all, index_tuple_get_equal_value, mock_idx
 
 
 def construct_condition(sign, column, value):
@@ -135,4 +138,65 @@ def test_nested_loop_join():
     opt.close()
 
 
-test_nested_loop_join()
+def test_physical_dml():
+    old_index = mock_idx.copy()
+
+    logical_insert = InsertOperator(
+        't1',
+        [TableColumn('t1', 'id'), TableColumn('t1', 'name')],
+        [(1, 'foo'), (2, 'bar')]
+    )
+    physical_insert = PhysicalInsert(logical_insert)
+    physical_insert.open()
+    list(physical_insert.next())
+    physical_insert.close()
+    assert list(table_tuple_get_all('t1')) == \
+           [(1, 'xiaoming'), (2, 'xiaohong'), (3, 'xiaoli'),
+            (4, 'xiaoguo'), (1, 'foo'), (2, 'bar')]
+    logical_delete = DeleteOperator(
+        't1',
+        condition=construct_condition('=', 't1.name', 'foo')
+    )
+    physical_delete = PhysicalDelete(
+        logical_delete
+    )
+    location_scan = LocationScan(TableScan('t1',
+                                           condition=logical_delete.condition))
+    physical_delete.add_child(location_scan)
+    physical_delete.open()
+    list(physical_delete.next())
+    physical_delete.close()
+    assert (list(table_tuple_get_all('t1'))) == \
+           [(1, 'xiaoming'), (2, 'xiaohong'), (3, 'xiaoli'), (4, 'xiaoguo'), (2, 'bar')]
+
+    logical_update = UpdateOperator('t1',
+                                    [TableColumn('t1', 'name')],
+                                    ['foo'],
+                                    condition=construct_condition('=', 't1.name', 'bar'))
+    physical_update = PhysicalUpdate(logical_update)
+    physical_update.add_child(LocationScan(TableScan('t1', condition=logical_update.condition)))
+    physical_update.open()
+    list(physical_update.next())
+    physical_update.close()
+    assert (list(table_tuple_get_all('t1'))) == \
+           [(1, 'xiaoming'), (2, 'xiaohong'), (3, 'xiaoli'), (4, 'xiaoguo'), (2, 'foo')]
+
+    logical_delete = DeleteOperator(
+        't1',
+        condition=construct_condition('=', 't1.name', 'foo')
+    )
+    physical_delete = PhysicalDelete(
+        logical_delete
+    )
+    location_scan = LocationScan(TableScan('t1',
+                                           condition=logical_delete.condition))
+    physical_delete.add_child(location_scan)
+    physical_delete.open()
+    list(physical_delete.next())
+    physical_delete.close()
+
+    assert mock_idx == old_index
+
+
+
+test_physical_dml()

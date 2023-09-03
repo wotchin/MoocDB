@@ -4,8 +4,11 @@ from imoocdb.common.fabric import TableColumn, FunctionColumn
 from imoocdb.errors import SQLLogicalPlanError
 from imoocdb.sql.parser.ast import *
 from imoocdb.sql.logical_operator import *
-from imoocdb.catalog import catalog_table, catalog_function
-from imoocdb.executor.operator.physical_operator import *
+from imoocdb.catalog import catalog_table, catalog_function, catalog_index
+from imoocdb.executor.operator.physical_operator import (
+    TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg,
+    NestedLoopJoin, PhysicalQuery,
+    PhysicalInsert, PhysicalUpdate, LocationScan, PhysicalDelete)
 
 
 # 可以用于判断表或者列是否存在，用于检验输入SQL语句的合法性
@@ -311,12 +314,102 @@ class SelectTransformer:
         return query
 
 
+class DMLTransformer:
+    @staticmethod
+    def transform(ast):
+        if isinstance(ast, Insert):
+            table_name = ast.table.parts
+            if not table_exists(table_name):
+                raise SQLLogicalPlanError(f'not found the table {table_name}.')
+            if ast.columns:
+                columns = [
+                    column.parts for column in ast.columns
+                ]
+            else:
+                columns = catalog_table.select(
+                    lambda r: r.table_name == table_name
+                )[0].columns
+            for column in columns:
+                if not column_exists(table_name, column):
+                    raise SQLLogicalPlanError(f'not found the column {column}.')
+            values = []
+            for value_list in ast.values:
+                strip_value = []
+                for value_constant in value_list:
+                    strip_value.append(value_constant.value)
+                values.append(strip_value)
+            return InsertOperator(
+                table_name=table_name,
+                columns=[TableColumn(table_name, column) for column in columns],
+                values=values
+            )
+        elif isinstance(ast, Update):
+            table_name = ast.table.parts
+            if not table_exists(table_name):
+                raise SQLLogicalPlanError(f'not found the table {table_name}.')
+            column_value_pair = [
+                (column.parts, value_constant.value)
+                for column, value_constant in ast.columns.items()
+            ]
+            for i in range(0, len(column_value_pair)):
+                column, value = column_value_pair[i]
+                # 如果是带有 . 符号的
+                if '.' in column:
+                    t, c = column.split('.')
+                    if t != table_name:
+                        raise SQLLogicalPlanError(
+                            f'cannot match the table {t}.')
+                    column = c
+                    column_value_pair[i] = (c, value)
+                if not column_exists(table_name, column):
+                    raise SQLLogicalPlanError(f'not found the column {column}.')
+            if ast.where:
+                condition = Condition(ast.where)
+                for node in (condition.left, condition.right):
+                    if (isinstance(node, TableColumn) and
+                            not column_exists(node.table_name, node.column_name)):
+                        raise SQLLogicalPlanError(f'not found the table column {node}.')
+            else:
+                condition = None
+            return UpdateOperator(
+                table_name=table_name,
+                columns=[
+                    TableColumn(table_name, column)
+                    for column, _ in column_value_pair
+                ],
+                values=[
+                    value for _, value in column_value_pair
+                ],
+                condition=condition)
+        elif isinstance(ast, Delete):
+            table_name = ast.table.parts
+            if not table_exists(table_name):
+                raise SQLLogicalPlanError(f'not found the table {table_name}.')
+            if ast.where:
+                condition = Condition(ast.where)
+                for node in (condition.left, condition.right):
+                    if (isinstance(node, TableColumn) and
+                            not column_exists(node.table_name, node.column_name)):
+                        raise SQLLogicalPlanError(f'not found the table column {node}.')
+            else:
+                condition = None
+            return DeleteOperator(table_name=table_name, condition=condition)
+        else:
+            raise NotImplementedError(f'not supported this AST {ast}.')
+
+
 def query_logical_plan(ast: ASTNode) -> LogicalOperator:
     if isinstance(ast, Select):
         return SelectTransformer.transform(ast)
+    elif (isinstance(ast, Insert) or
+          isinstance(ast, Update) or
+          isinstance(ast, Delete)):
+        return DMLTransformer.transform(ast)
     else:
         raise NotImplementedError('not supported non-select statement yet.')
 
+
+###########################################
 
 # implementation 表示将逻辑计划转换为物理计划
 # select 表示针对SELECT语句
@@ -391,7 +484,6 @@ class SelectImplementation:
 
         return IndexScan(index_name=shortest_index.index_name, condition=node.condition)
 
-
     @staticmethod
     def implement_sort(node) -> Sort:
         # 可以优化的点：
@@ -452,6 +544,12 @@ class SelectImplementation:
         return physical_node
 
 
+def get_physical_scan_from_predicate(table_name, condition):
+    logical_scan = ScanOperator(table_name=table_name)
+    logical_scan.condition = condition
+    return SelectImplementation.implement_scan(logical_scan)
+
+
 def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
     if isinstance(logical_plan, Query):
         if logical_plan.query_type == Query.SELECT:
@@ -460,6 +558,24 @@ def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
             raise NotImplementedError(
                 f'not supported this query type {logical_plan.query_type}.'
             )
+    elif isinstance(logical_plan, InsertOperator):
+        return PhysicalInsert(logical_plan)
+    elif isinstance(logical_plan, UpdateOperator):
+        physical_update = PhysicalUpdate(logical_plan)
+        scan = LocationScan(
+            get_physical_scan_from_predicate(
+                logical_plan.table_name, logical_plan.condition)
+        )
+        physical_update.add_child(scan)
+        return physical_update
+    elif isinstance(logical_plan, DeleteOperator):
+        physical_delete = PhysicalDelete(logical_plan)
+        scan = LocationScan(
+            get_physical_scan_from_predicate(
+                logical_plan.table_name, logical_plan.condition)
+        )
+        physical_delete.add_child(scan)
+        return physical_delete
     else:
         raise NotImplementedError(
             'not supported this logical plan.'
