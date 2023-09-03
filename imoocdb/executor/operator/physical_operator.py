@@ -225,6 +225,8 @@ class IndexScan(PhysicalOperator):
             )
 
     def next(self):
+        # next_location() 类似于取指针/引用
+        # next() 相当于解引用 *p , 或者直接返回具体的值
         for location in self.next_location():
             yield table_tuple_get_one(self.table_name, location)
 
@@ -725,6 +727,8 @@ class PhysicalInsert(PhysicalOperator):
                     f'cannot insert data into the table {self.logical_operator.table_name}.'
                 )
 
+            # insert into t1 (id) values ...; 补充null的场景
+            # insert into t1 values ...;
             for index_info in self.indexes:
                 index_tuple_insert_one(
                     index_info['index_name'],
@@ -793,7 +797,7 @@ class PhysicalUpdate(PhysicalOperator):
         # `for location in self.children[0].next_location()`
         for child in self.children:
             for location in child.next():
-                if not location:
+                if location is None:
                     # 出现问题了，要回滚！
                     raise RollbackError(
                         f'cannot update data for the table {self.logical_operator.table_name}.'

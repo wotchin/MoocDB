@@ -547,6 +547,8 @@ class SelectImplementation:
 def get_physical_scan_from_predicate(table_name, condition):
     logical_scan = ScanOperator(table_name=table_name)
     logical_scan.condition = condition
+    # 此时，是一个trick, 相当于 把 update/delete 转换为 select 的部分功能
+    # 再把 select 中的 scan 算子提取，复用
     return SelectImplementation.implement_scan(logical_scan)
 
 
