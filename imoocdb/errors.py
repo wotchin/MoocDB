@@ -10,6 +10,9 @@ class SQLLogicalPlanError(NoticeError):
     pass
 
 
+class PageError(RollbackError):
+    pass
+
 class ExecutorCheckError(NoticeError):
     pass
 
