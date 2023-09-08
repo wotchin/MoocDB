@@ -13,6 +13,9 @@ class SQLLogicalPlanError(NoticeError):
 class PageError(RollbackError):
     pass
 
+class BPlusTreeError(RollbackError):
+    pass
+
 class ExecutorCheckError(NoticeError):
     pass
 
