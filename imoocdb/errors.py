@@ -13,9 +13,14 @@ class SQLLogicalPlanError(NoticeError):
 class PageError(RollbackError):
     pass
 
+
+class LRUError(RollbackError):
+    pass
+
+
 class BPlusTreeError(RollbackError):
     pass
 
+
 class ExecutorCheckError(NoticeError):
     pass
-
