@@ -12,3 +12,9 @@ class CatalogFunctionForm(CatalogForm):
 class CatalogFunction(CatalogBasic):
     def __init__(self):
         super().__init__('function_information')
+
+    def dump(self):
+        pass
+
+    def load(self):
+        pass

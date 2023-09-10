@@ -1,1 +1,3 @@
 TEMP_DIRECTORY = 'temp'
+CATALOG_DIRECTORY = 'catalog'
+
