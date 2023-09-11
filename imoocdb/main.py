@@ -23,10 +23,10 @@ def exec_imoocdb_query(query_string) -> Result:
         result = exec_plan(plan)
         return result
     except RollbackError as e:
-        notice_client('ERROR', f'Cannot execute this query due to {e}, aborting.')
+        notice_client('ERROR', f'Cannot execute this query because {e}, aborting.')
         # todo: rollback operation
     except NoticeError as e:
-        notice_client('ERROR', f'Cannot execute this query due to {e}.')
+        notice_client('ERROR', f'Cannot execute this query because {e}.')
     return empty_result
 
 

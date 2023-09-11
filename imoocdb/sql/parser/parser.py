@@ -116,7 +116,8 @@ class SQLParser(sly.Parser):
        'update',
        'insert',
        'delete',
-       'create_table')
+       'create_table',
+       'create_index')
     def query(self, p):
         return p[0]
 
@@ -406,6 +407,13 @@ class SQLParser(sly.Parser):
     @_('CREATE TABLE identifier LPAREN defined_columns RPAREN')
     def create_table(self, p):
         return CreateTable(p.identifier, p.defined_columns)
+
+    @_('CREATE INDEX identifier ON identifier LPAREN target_columns RPAREN')
+    def create_index(self, p):
+        return CreateIndex(
+            index=p.identifier0, table=p.identifier1,
+            columns=p.target_columns
+        )
 
     def error(self, p):
         if p:

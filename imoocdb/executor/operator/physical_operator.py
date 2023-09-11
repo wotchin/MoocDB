@@ -2,13 +2,14 @@ import os
 import pickle
 import time
 
-from imoocdb.catalog import CatalogTableForm
+from imoocdb.catalog import CatalogTableForm, CatalogIndexForm
 from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
 from imoocdb.common.fabric import TableColumn
 from imoocdb.constant import TEMP_DIRECTORY
 from imoocdb.errors import ExecutorCheckError, RollbackError
 from imoocdb.session_manager import get_current_session_id
 from imoocdb.sql.logical_operator import *
+from imoocdb.sql.utils import table_exists, column_exists
 from imoocdb.sql.parser.ast import JoinType, CreateTable, CreateIndex
 from imoocdb.storage.entry import (table_tuple_get_all,
                                    table_tuple_insert_one,
@@ -19,7 +20,7 @@ from imoocdb.storage.entry import (table_tuple_get_all,
                                    index_tuple_update_one,
                                    index_tuple_get_equal_value_locations, index_tuple_get_range_locations,
                                    table_tuple_get_one, table_tuple_get_all_locations, table_tuple_update_one,
-                                   table_tuple_delete_multiple)
+                                   table_tuple_delete_multiple, index_tuple_create)
 
 
 def is_condition_true(values: dict, condition):
@@ -736,7 +737,8 @@ class PhysicalInsert(PhysicalOperator):
                     key=self._pad_null(
                         tup, index_info['column_ids'], len(index_info['column_ids'])),
                     value=location)
-                yield
+
+            yield
 
 
 class PhysicalUpdate(PhysicalOperator):
@@ -902,8 +904,23 @@ class PhysicalDDL(PhysicalOperator):
             catalog_table.insert(CatalogTableForm(
                 self.ast.table.parts, columns, types))
         elif isinstance(self.ast, CreateIndex):
-            # todo: impl
-            pass
+            index_name = self.ast.index.parts
+            table_name = self.ast.table.parts
+            if not table_exists(table_name):
+                raise ExecutorCheckError(f'not found the table {table_name}.')
+
+            columns = []
+            for column in self.ast.columns:
+                column = column.parts
+                columns.append(column)
+                if not column_exists(table_name, column):
+                    raise ExecutorCheckError(
+                        f'not found the column {column} in table {table_name}.')
+
+            catalog_index.insert(CatalogIndexForm(index_name,
+                                                  columns,
+                                                  table_name))
+            index_tuple_create(index_name, table_name, columns)
         else:
             raise NotImplementedError(f'not supported this type {type(self.ast)}.')
 

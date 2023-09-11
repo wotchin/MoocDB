@@ -178,6 +178,10 @@ mock_idx = {
 }
 
 
+def index_tuple_create(index_name, table_name, columns):
+    pass
+
+
 def range_compare(value, start, end):
     if start is None and end is None:
         return False
