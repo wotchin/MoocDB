@@ -107,3 +107,19 @@ class Delete(ASTNode):
         super().__init__()
         self.table = table
         self.where = where
+
+
+class CreateTable(ASTNode):
+    def __init__(self, table, columns):
+        super().__init__()
+        self.table = table
+        self.columns = columns
+
+
+class CreateIndex(ASTNode):
+    def __init__(self, index, table, columns):
+        super().__init__()
+        self.index = index
+        self.table = table
+        self.columns = columns
+

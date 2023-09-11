@@ -2,13 +2,14 @@ import os
 import pickle
 import time
 
+from imoocdb.catalog import CatalogTableForm
 from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
 from imoocdb.common.fabric import TableColumn
 from imoocdb.constant import TEMP_DIRECTORY
 from imoocdb.errors import ExecutorCheckError, RollbackError
 from imoocdb.session_manager import get_current_session_id
 from imoocdb.sql.logical_operator import *
-from imoocdb.sql.parser.ast import JoinType
+from imoocdb.sql.parser.ast import JoinType, CreateTable, CreateIndex
 from imoocdb.storage.entry import (table_tuple_get_all,
                                    table_tuple_insert_one,
                                    covered_index_tuple_get_range,
@@ -875,3 +876,39 @@ class PhysicalDelete(PhysicalOperator):
 
         table_tuple_delete_multiple(self.logical_operator.table_name,
                                     locations)
+
+
+class PhysicalDDL(PhysicalOperator):
+    def __init__(self, logical_operator):
+        super().__init__('DDL')
+        self.ast = logical_operator.ast
+
+    @staticmethod
+    def cast_to_type(type_name):
+        if type_name == 'int' or type_name == 'integer':
+            return int
+        elif type_name == 'text':
+            return str
+        else:
+            raise NotImplementedError(f'not supported this type {type_name}.')
+
+    def open(self):
+        if isinstance(self.ast, CreateTable):
+            columns = []
+            types = []
+            for column, type_ in self.ast.columns:
+                columns.append(column)
+                types.append(self.cast_to_type(type_))
+            catalog_table.insert(CatalogTableForm(
+                self.ast.table.parts, columns, types))
+        elif isinstance(self.ast, CreateIndex):
+            # todo: impl
+            pass
+        else:
+            raise NotImplementedError(f'not supported this type {type(self.ast)}.')
+
+    def close(self):
+        pass
+
+    def next(self):
+        yield

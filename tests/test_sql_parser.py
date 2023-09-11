@@ -29,5 +29,7 @@ def test_parse_dml_statement():
     assert str(ast) == '<Delete> table=<Identifier> parts=t1 where=<BinaryOperation> op=> args=[<Identifier> parts=a, <Constant> value=100]'
 
 
-test_parse_select_statement()
-test_parse_dml_statement()
+def test_parse_ddl_statement():
+    ast = query_parse('CREATE TABLE t1 (id int, name text, gender int)')
+    assert str(ast) == "<CreateTable> table=<Identifier> parts=t1 columns=[['id', 'int'], ['name', 'text'], ['gender', 'int']]"
+

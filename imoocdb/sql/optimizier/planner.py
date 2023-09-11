@@ -8,7 +8,7 @@ from imoocdb.catalog import catalog_table, catalog_function, catalog_index
 from imoocdb.executor.operator.physical_operator import (
     TableScan, IndexScan, CoveredIndexScan, Sort, HashAgg,
     NestedLoopJoin, PhysicalQuery,
-    PhysicalInsert, PhysicalUpdate, LocationScan, PhysicalDelete)
+    PhysicalInsert, PhysicalUpdate, LocationScan, PhysicalDelete, PhysicalDDL)
 
 
 # 可以用于判断表或者列是否存在，用于检验输入SQL语句的合法性
@@ -405,6 +405,9 @@ def query_logical_plan(ast: ASTNode) -> LogicalOperator:
           isinstance(ast, Update) or
           isinstance(ast, Delete)):
         return DMLTransformer.transform(ast)
+    elif (isinstance(ast, CreateTable) or
+          isinstance(ast, CreateIndex)):
+        return DDLOperator(ast)
     else:
         raise NotImplementedError('not supported non-select statement yet.')
 
@@ -578,6 +581,8 @@ def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
         )
         physical_delete.add_child(scan)
         return physical_delete
+    elif isinstance(logical_plan, DDLOperator):
+        return PhysicalDDL(logical_plan)
     else:
         raise NotImplementedError(
             'not supported this logical plan.'

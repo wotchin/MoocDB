@@ -175,3 +175,10 @@ class UpdateOperator(LogicalOperator):
         self.columns = columns
         self.values = values
         self.condition = condition
+
+
+class DDLOperator(LogicalOperator):
+    def __init__(self, ast):
+        super().__init__('DDL')
+        self.ast = ast
+

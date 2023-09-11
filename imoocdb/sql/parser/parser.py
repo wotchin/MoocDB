@@ -115,7 +115,8 @@ class SQLParser(sly.Parser):
     @_('select',
        'update',
        'insert',
-       'delete')
+       'delete',
+       'create_table')
     def query(self, p):
         return p[0]
 
@@ -385,6 +386,26 @@ class SQLParser(sly.Parser):
     @_('LPAREN expr_list RPAREN')
     def expr_list_set(self, p):
         return [p.expr_list]
+
+    # DDL
+    # create table
+    # e.g., CREATE TABLE t1 (id int, name text, gender int)
+    @_('defined_columns COMMA defined_column')
+    def defined_columns(self, p):
+        p.defined_columns.append(p.defined_column)
+        return p.defined_columns
+
+    @_('defined_column')
+    def defined_columns(self, p):
+        return [p.defined_column]
+
+    @_('id id')
+    def defined_column(self, p):
+        return [p.id0, p.id1]
+
+    @_('CREATE TABLE identifier LPAREN defined_columns RPAREN')
+    def create_table(self, p):
+        return CreateTable(p.identifier, p.defined_columns)
 
     def error(self, p):
         if p:
