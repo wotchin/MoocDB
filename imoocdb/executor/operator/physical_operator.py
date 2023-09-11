@@ -715,18 +715,18 @@ class PhysicalInsert(PhysicalOperator):
     def next(self):
         for tup in self.logical_operator.values:
             # 更新基础数据表
-            location = table_tuple_insert_one(
-                self.logical_operator.table_name, self._pad_null(
-                    tup, self.column_ids, self.table_column_num
+            try:
+                location = table_tuple_insert_one(
+                    self.logical_operator.table_name, self._pad_null(
+                        tup, self.column_ids, self.table_column_num
+                    )
                 )
-            )
-            # 同步更新所有涉及到的索引
-            if not location:
+            except Exception as e:
                 # 出现问题了，要回滚！
                 raise RollbackError(
                     f'cannot insert data into the table {self.logical_operator.table_name}.'
                 )
-
+            # 同步更新所有涉及到的索引
             # insert into t1 (id) values ...; 补充null的场景
             # insert into t1 values ...;
             for index_info in self.indexes:

@@ -58,5 +58,3 @@ def test_dml_logical_plan():
     # assert explain(plan) == ['Delete']
     print(explain(plan))
 
-
-test_dml_logical_plan()

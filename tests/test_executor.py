@@ -150,9 +150,12 @@ def test_physical_dml():
     physical_insert.open()
     list(physical_insert.next())
     physical_insert.close()
-    assert list(table_tuple_get_all('t1')) == \
-           [(1, 'xiaoming'), (2, 'xiaohong'), (3, 'xiaoli'),
-            (4, 'xiaoguo'), (1, 'foo'), (2, 'bar')]
+    assert list(table_tuple_get_all('t1')) == [(1, 'xiaoming'),
+                                               (2, 'xiaohong'),
+                                               (3, 'xiaoli'),
+                                               (4, 'xiaoguo'),
+                                               (1, 'foo'),
+                                               (2, 'bar')]
     logical_delete = DeleteOperator(
         't1',
         condition=construct_condition('=', 't1.name', 'foo')
@@ -196,7 +199,3 @@ def test_physical_dml():
     physical_delete.close()
 
     assert mock_idx == old_index
-
-
-
-test_physical_dml()

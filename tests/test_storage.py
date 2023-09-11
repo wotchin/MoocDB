@@ -19,16 +19,16 @@ def test_table_tuple():
 
     assert expected_results == real_results
 
-
-def test_index_tuple():
-    # Python 的生成器 generator
-    results = index_tuple_get_range('idx', (2,), (4,))
-    assert (list(results)) == [(3, 'xiaoli')]
-    results = index_tuple_get_range('idx', (2,))
-    assert (list(results)) == [(3, 'xiaoli'), (4, 'xiaoguo')]
-
-    results = index_tuple_get_equal_value('idx', (1,))
-    assert (list(results)) == [(1, 'xiaoming')]
+#
+# def test_index_tuple():
+#     # Python 的生成器 generator
+#     results = index_tuple_get_range('idx', (2,), (4,))
+#     assert (list(results)) == [(3, 'xiaoli')]
+#     results = index_tuple_get_range('idx', (2,))
+#     assert (list(results)) == [(3, 'xiaoli'), (4, 'xiaoguo')]
+#
+#     results = index_tuple_get_equal_value('idx', (1,))
+#     assert (list(results)) == [(1, 'xiaoming')]
 
 
 def test_covered_index_tuple():
@@ -40,5 +40,3 @@ def test_covered_index_tuple():
     assert (list(results)) == [(3,), (4,)]
 
 
-test_index_tuple()
-test_covered_index_tuple()

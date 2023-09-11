@@ -1,9 +1,7 @@
-import io
+from imoocdb.errors import PageError
 
 PAGE_SIZE = 8 * 1024  # 8kb
 LITTLE_ORDER = 'little'
-
-from imoocdb.errors import PageError
 
 
 def uint8_to_bytes(value):
@@ -200,8 +198,15 @@ class Page:
             # 我们可以在此时，进行后续元素的整体搬移，也可以后续批量去做组织
             return sid
         # 第一种：
-        self.delete(sid)
-        return self.insert(record)
+        slot = self.slot_directory[sid]
+        old_state = slot.state
+        try:
+            self.delete(sid)
+            new_sid = self.insert(record)
+        except PageError as e:
+            slot.state = old_state
+            raise e
+        return new_sid
 
     def serialize(self) -> bytes:
         free_space_size = (self.page_header.free_space_end -
@@ -214,10 +219,10 @@ class Page:
         for slot in self.slot_directory:
             slot_directory_bytes += slot.serialize()
         return (
-            self.page_header.serialize() +
-            bytes(slot_directory_bytes) +
-            bytes(free_space_size) +
-            bytes(self.records)
+                self.page_header.serialize() +
+                bytes(slot_directory_bytes) +
+                bytes(free_space_size) +
+                bytes(self.records)
         )
 
     @staticmethod
@@ -228,6 +233,5 @@ class Page:
             slot = Slot.deserialize(buff[slot_offset: slot_offset + Slot.size()])
             page.slot_directory.append(slot)
 
-        page.records = bytearray(buff[header.free_space_end: ])
+        page.records = bytearray(buff[header.free_space_end:])
         return page
-
