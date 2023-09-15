@@ -8,7 +8,7 @@ from imoocdb.common.fabric import TableColumn
 from imoocdb.sql.logical_operator import (
     Condition, InsertOperator, UpdateOperator, DeleteOperator)
 from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant, JoinType
-from imoocdb.storage.entry import table_tuple_get_all, index_tuple_get_equal_value, mock_idx
+from imoocdb.storage.entry import table_tuple_get_all, index_tuple_get_equal_value
 
 
 def construct_condition(sign, column, value):
@@ -139,8 +139,6 @@ def test_nested_loop_join():
 
 
 def test_physical_dml():
-    old_index = mock_idx.copy()
-
     logical_insert = InsertOperator(
         't1',
         [TableColumn('t1', 'id'), TableColumn('t1', 'name')],
@@ -198,4 +196,3 @@ def test_physical_dml():
     list(physical_delete.next())
     physical_delete.close()
 
-    assert mock_idx == old_index

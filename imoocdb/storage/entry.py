@@ -4,6 +4,8 @@ import pickle
 from imoocdb.catalog.entry import catalog_table, catalog_index
 from imoocdb.constant import DATA_DIRECTORY
 from imoocdb.errors import PageError
+from imoocdb.storage.bplus_tree import BPlusTree, BPlusTreeTuple, load_root_node
+from imoocdb.storage.lru import LRUCache
 from imoocdb.storage.slotted_page import Page, PAGE_SIZE
 from imoocdb.storage.transaction.entry import get_current_lsn
 
@@ -34,7 +36,7 @@ def table_tuple_get_pages(table_name):
 
 
 # 后面我们用LRU去替换该cache
-cache = {}
+cache = LRUCache()
 
 
 def table_tuple_get_page(table_name, pageno):
@@ -144,7 +146,7 @@ def table_tuple_insert_one(table_name, tup):
         sid = new_page.insert(tuple_to_bytes(tup))
     # todo: WAL
     page.set_header(lsn=get_current_lsn())
-    return sid
+    return pageno, sid
 
 
 def table_tuple_delete_one(table_name, location):
@@ -166,20 +168,41 @@ def table_tuple_delete_multiple(table_name, locations):
     table_tuple_reorganize(table_name)
 
 
-mock_idx = {
-    # 该索引的 key 是 t1 的 id 列的具体值，
-    # 该索引的 value 是该行元组在原始表数据中的逻辑位置(location)
-    'idx': {
-        (1,): [(0, 0)],
-        (2,): [(0, 1)],
-        (3,): [(0, 2)],
-        (4,): [(0, 3)]
-    }
-}
+#
+# mock_idx = {
+#     # 该索引的 key 是 t1 的 id 列的具体值，
+#     # 该索引的 value 是该行元组在原始表数据中的逻辑位置(location)
+#     'idx': {
+#         (1,): [(0, 0)],
+#         (2,): [(0, 1)],
+#         (3,): [(0, 2)],
+#         (4,): [(0, 3)]
+#     }
+# }
+
+
+def get_index_filename(index_name):
+    if not os.path.exists(DATA_DIRECTORY):
+        os.mkdir(DATA_DIRECTORY)
+    return os.path.join(DATA_DIRECTORY, index_name + '.idx')
 
 
 def index_tuple_create(index_name, table_name, columns):
-    pass
+    table_columns = catalog_table.select(
+        lambda r: r.table_name == table_name
+    )[0].columns
+    # 获取索引列的下标
+    columns_indexes = [table_columns.index(c) for c in columns]
+
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename)
+
+    for location in table_tuple_get_all_locations(table_name):
+        tup = table_tuple_get_one(table_name, location)
+        key = BPlusTreeTuple(tuple(tup[i] for i in columns_indexes))
+        tree.insert(key, location)
+
+    tree.serialize()
 
 
 def range_compare(value, start, end):
@@ -193,17 +216,14 @@ def range_compare(value, start, end):
         return start < value < end
 
 
-def index_tuple_get_range_locations(index_name, start=None, end=None):
+def index_tuple_get_range_locations(index_name, start=float('-inf'), end=float('inf')):
     """start, end 两个参数，是用来指定扫描索引中部分数据的，如果不给这两个参数赋值，
     那么，就默认拿这个索引中的全部数据.
     """
-    for key in mock_idx[index_name]:
-        # python语言天然支持元组(tuple)的比较，其他语言可能不支持，需要自己写
-        if range_compare(key, start, end):
-            # yield mock_idx[index_name][key]
-            locations = mock_idx[index_name][key]
-            for location in locations:
-                yield location
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename, load_root_node(filename))
+    for location in tree.find_range(start, end):
+        yield location
 
 
 def index_tuple_get_range(index_name, start=None, end=None):
@@ -218,9 +238,9 @@ def index_tuple_get_range(index_name, start=None, end=None):
 
 
 def index_tuple_get_equal_value_locations(index_name, equal_value):
-    if equal_value not in mock_idx[index_name]:
-        return ()
-    for location in mock_idx[index_name][equal_value]:
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename, load_root_node(filename))
+    for location in tree.find(equal_value):
         yield location
 
 
@@ -231,40 +251,33 @@ def index_tuple_get_equal_value(index_name, equal_value):
         yield table_tuple_get_one(table_name, location)
 
 
-def covered_index_tuple_get_range(index_name, start=None, end=None):
-    for key in mock_idx[index_name]:
-        if range_compare(key, start, end):
-            # yield mock_idx[index_name][key]
-            locations = mock_idx[index_name][key]
-            # 该过程就是**回表**过程，即从全量表数据中获取location的部分
-            # 我们注意了！covered index 没有回表过程，这就是 covered 的含义，
-            # 也是 IndexOnlyScan 中 Only 的意思
-            for location in locations:
-                yield key
+def covered_index_tuple_get_range(index_name, start=float('-inf'), end=float('inf')):
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename, load_root_node(filename))
+    for key in tree.find_range(start, end, return_keys=True):
+        # key 的数据类型是 BPlusTreeTuple
+        yield key.tup
 
 
 def covered_index_tuple_get_equal_value(index_name, equal_value):
-    for location in mock_idx[index_name][equal_value]:
+    for location in index_tuple_get_equal_value_locations(index_name, equal_value):
         yield equal_value
 
 
 def index_tuple_insert_one(index_name, key, value):
-    if key not in mock_idx[index_name]:
-        mock_idx[index_name][key] = []
-    mock_idx[index_name][key].append(value)
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename, load_root_node(filename))
+    tree.insert(BPlusTreeTuple(key), value)
+    # todo: LSN
+    tree.serialize()
 
 
 def index_tuple_delete_one(index_name, key, location=None):
-    if location is None:
-        # 移除所有该Key的索引
-        del mock_idx[index_name][key]
-    else:
-        i = 0
-        while i < len(mock_idx[index_name][key]):
-            if location == mock_idx[index_name][key][i]:
-                mock_idx[index_name][key].pop(i)
-                i -= 1
-            i += 1
+    filename = get_index_filename(index_name)
+    tree = BPlusTree(filename, load_root_node(filename))
+    tree.delete(key, location)
+    # todo: LSN
+    tree.serialize()
 
 
 def index_tuple_update_one(index_name, key, old_value, value):

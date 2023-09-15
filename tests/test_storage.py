@@ -35,7 +35,7 @@ def test_covered_index_tuple():
     results = covered_index_tuple_get_range('idx', (2,), (4,))
     assert (list(results)) == [(3,)]
     results = covered_index_tuple_get_equal_value('idx', (2,))
-    assert (list(results)) == [(2,)]
+    assert (list(results)) == [(2,), (2,)]
     results = covered_index_tuple_get_range('idx', (2,))
     assert (list(results)) == [(3,), (4,)]
 

@@ -5,7 +5,8 @@ import pytest
 
 from imoocdb.catalog import CatalogTableForm, CatalogIndexForm
 from imoocdb.catalog.entry import catalog_index, catalog_table
-from imoocdb.storage.entry import table_tuple_insert_one
+from imoocdb.main import init_database
+from imoocdb.storage.entry import table_tuple_insert_one, index_tuple_create
 
 TEST_DATA_DIRECTORY = 'test_database'
 
@@ -34,8 +35,7 @@ def setup():
     if os.path.exists(TEST_DATA_DIRECTORY):
         shutil.rmtree(TEST_DATA_DIRECTORY)
 
-    os.mkdir(TEST_DATA_DIRECTORY)
-    os.chdir(TEST_DATA_DIRECTORY)
+    init_database(TEST_DATA_DIRECTORY)
 
     catalog_table.insert(CatalogTableForm('t1', ['id', 'name'], [int, str]))
     catalog_table.insert(CatalogTableForm('t2', ['id', 'name', 'address'], [int, str, str]))
@@ -52,6 +52,8 @@ def setup():
     table_tuple_insert_one('t2', (1, 'ming', 'BJ'))
     table_tuple_insert_one('t2', (5, 'hong', 'SH'))
     table_tuple_insert_one('t2', (3, 'li', 'SZ'))
+
+    index_tuple_create('idx', 't1', ['id'])
 
 
 def teardown():

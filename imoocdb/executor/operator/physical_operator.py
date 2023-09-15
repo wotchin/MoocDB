@@ -200,7 +200,8 @@ class IndexScan(PhysicalOperator):
         elif self.condition.sign == '>':
             # eg, ... where t1.a > 100
             # 等价于 ... where 100 < t1.a
-            start = end = None
+            start = float('-inf')
+            end = float('inf')
             if isinstance(self.condition.left, TableColumn):
                 start = (self.constant,)
             else:
@@ -212,7 +213,8 @@ class IndexScan(PhysicalOperator):
                 yield location
         elif self.condition.sign == '<':
             # eg, ... t1.a < 100
-            start = end = None
+            start = float('-inf')
+            end = float('inf')
             if isinstance(self.condition.left, TableColumn):
                 end = (self.constant,)
             else:
@@ -605,15 +607,16 @@ class NestedLoopJoin(PhysicalOperator):
                 yield padding_nulls_left + right_tuple
 
     def next(self):
-        if self.join_type == JoinType.CROSS_JOIN:
+        join_type = self.join_type.upper()
+        if join_type == JoinType.CROSS_JOIN:
             generator = self.cross_join()
-        elif self.join_type == JoinType.INNER_JOIN:
+        elif join_type == JoinType.INNER_JOIN:
             generator = self.inner_join()
-        elif self.join_type == JoinType.LEFT_JOIN:
+        elif join_type == JoinType.LEFT_JOIN:
             generator = self.left_join()
-        elif self.join_type == JoinType.RIGHT_JOIN:
+        elif join_type == JoinType.RIGHT_JOIN:
             generator = self.right_join()
-        elif self.join_type == JoinType.FULL_JOIN:
+        elif join_type == JoinType.FULL_JOIN:
             generator = self.full_join()
         else:
             raise NotImplementedError(f'not supported {self.join_type}.')
@@ -920,7 +923,12 @@ class PhysicalDDL(PhysicalOperator):
             catalog_index.insert(CatalogIndexForm(index_name,
                                                   columns,
                                                   table_name))
-            index_tuple_create(index_name, table_name, columns)
+            try:
+                index_tuple_create(index_name, table_name, columns)
+            except Exception as e:
+                # 相当于一个小回滚
+                catalog_index.delete(lambda r: r.index_name == index_name)
+                raise RollbackError(e)
         else:
             raise NotImplementedError(f'not supported this type {type(self.ast)}.')
 

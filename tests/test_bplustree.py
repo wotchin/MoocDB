@@ -1,4 +1,5 @@
-from imoocdb.storage.bplus_tree import BPlusTree
+import os
+from imoocdb.storage.bplus_tree import BPlusTree, BPlusTreeTuple
 
 
 def test_bplus_tree():
@@ -35,4 +36,46 @@ def test_bplus_tree():
     assert result == list(range(0, 100))
 
 
-test_bplus_tree()
+def test_bplus_tree_tuple():
+    t1 = BPlusTreeTuple((None, 1, 2))
+    t2 = BPlusTreeTuple((1, 1, 2))
+    t3 = BPlusTreeTuple((2, 1, 2))
+    t4 = BPlusTreeTuple((2, 0, 2))
+
+    assert t1 == t1
+    assert not t1 == t2
+    assert t1 < t2
+    assert t2 < t3
+    assert t3 > t4
+    assert not t3 <= t4
+    assert not t3 < t4
+
+    tree = BPlusTree()
+    tree.insert(t1, (0, 1))
+    tree.insert(t2, (0, 2))
+    tree.insert(t3, (0, 3))
+    tree.insert(t4, (0, 4))
+
+    assert (tree.find_range()) == [(0, 1), (0, 2), (0, 4), (0, 3)]
+
+
+def test_bplus_tree_serialize():
+    filename = 'test.idx'
+    if os.path.exists(filename):
+        os.unlink(filename)
+
+    tree = BPlusTree('test.idx')
+    tree.insert(BPlusTreeTuple((None, 1)), (0, 1))
+    tree.insert(BPlusTreeTuple((2, 1)), (2, 1))
+    tree.insert(BPlusTreeTuple((None, 1)), (0, 2))
+
+    assert (tree.find_range()) == [(0, 1), (0, 2), (2, 1)]
+
+    tree.serialize()
+
+    tree2 = BPlusTree.deserialize('test.idx')
+    assert (tree2.find_range()) == [(0, 1), (0, 2), (2, 1)]
+
+    # for i in range(100):
+    #     tree2.insert(BPlusTreeTuple((None, 1)), (100, i))
+    # print(tree2.find_range())

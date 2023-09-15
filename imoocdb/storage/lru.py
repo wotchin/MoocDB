@@ -21,6 +21,7 @@ class LRUNode:
     def __repr__(self):
         return f'{self.key}:{self.value}'
 
+
 # todo: 当前LRU不是线程安全的，这在面对多个线程的时候，要加锁
 class LRUCache:
     def __init__(self, capacity=LRU_CAPACITY):
@@ -105,3 +106,12 @@ class LRUCache:
         # 思考：如果想遍历当前LRU中的所有元素，应该
         # 怎么遍历呢？
         pass
+
+    def __getitem__(self, item):
+        return self.get(item)
+
+    def __setitem__(self, key, value):
+        return self.put(key, value)
+
+    def __contains__(self, item):
+        return item in self.cache

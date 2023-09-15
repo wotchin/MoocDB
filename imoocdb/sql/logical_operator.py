@@ -4,6 +4,7 @@ from imoocdb.common.fabric import TableColumn
 from imoocdb.catalog.entry import catalog_table
 
 from .parser.ast import BinaryOperation, FunctionOperation, Identifier, Constant
+from ..errors import NoticeError
 
 
 class LogicalOperator:
@@ -62,7 +63,7 @@ class Condition:
 
         full_name = node.parts
         if '.' not in full_name:
-            raise SyntaxError('not set a table name in the condition.')
+            raise NoticeError('not set a table name in the condition.')
         table_name, column = full_name.split('.')
         return TableColumn(table_name, column)
 
