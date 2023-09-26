@@ -24,3 +24,7 @@ class BPlusTreeError(RollbackError):
 
 class ExecutorCheckError(NoticeError):
     pass
+
+
+class LockConflictError(RollbackError):
+    pass

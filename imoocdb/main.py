@@ -72,4 +72,4 @@ def start_simple_terminal_client():
         print(result)
 
 
-start_simple_terminal_client()
+# start_simple_terminal_client()

@@ -21,7 +21,8 @@ from imoocdb.storage.entry import (table_tuple_get_all,
                                    index_tuple_get_equal_value_locations, index_tuple_get_range_locations,
                                    table_tuple_get_one, table_tuple_get_all_locations, table_tuple_update_one,
                                    table_tuple_delete_multiple, index_tuple_create)
-from imoocdb.storage.transaction.entry import checkpoint
+from imoocdb.storage.lock.lock import lock_manager
+from imoocdb.storage.transaction.entry import checkpoint, transaction_mgr
 
 
 def is_condition_true(values: dict, condition):
@@ -120,8 +121,12 @@ class TableScan(PhysicalOperator):
                 lambda r: r.table_name == self.table_name)[0].columns:
             self.columns.append(TableColumn(self.table_name, column))
 
+        xid = transaction_mgr.session_xid()
+        lock_manager.acquire_lock(('table', self.table_name), xid, 's')
+
     def close(self):
-        pass
+        xid = transaction_mgr.session_xid()
+        lock_manager.release_lock(('table', self.table_name), xid)
 
     def next(self):
         for tup in table_tuple_get_all(self.table_name):
@@ -177,6 +182,9 @@ class IndexScan(PhysicalOperator):
         self.constant = constants[0]
         self.fill_in_columns()
 
+        xid = transaction_mgr.session_xid()
+        lock_manager.acquire_lock(('index', self.index_name), xid, 's')
+
     def fill_in_columns(self):
         # 采集上来的元组tuple结构
         self.columns = []
@@ -188,7 +196,8 @@ class IndexScan(PhysicalOperator):
             self.columns.append(TableColumn(self.table_name, column))
 
     def close(self):
-        pass
+        xid = transaction_mgr.session_xid()
+        lock_manager.release_lock(('index', self.index_name), xid)
 
     def next_location(self):
         if not self.condition:
@@ -708,8 +717,18 @@ class PhysicalInsert(PhysicalOperator):
                 dict(index_name=index_name, column_ids=column_ids)
             )
 
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.acquire_lock(('table', table_name), xid, 'x')
+        for index_item in self.indexes:
+            lock_manager.acquire_lock(('index', index_item['index_name']), xid, 'x')
+
     def close(self):
-        pass
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.release_lock(('table', table_name), xid)
+        for index_item in self.indexes:
+            lock_manager.release_lock(('index', index_item['index_name']), xid)
 
     @staticmethod
     def _pad_null(tup, set_ids, total_length):
@@ -788,9 +807,21 @@ class PhysicalUpdate(PhysicalOperator):
         for child in self.children:
             child.open()
 
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.acquire_lock(('table', table_name), xid, 'x')
+        for index_item in self.indexes:
+            lock_manager.acquire_lock(('index', index_item['index_name']), xid, 'x')
+
     def close(self):
         for child in self.children:
             child.close()
+
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.release_lock(('table', table_name), xid,)
+        for index_item in self.indexes:
+            lock_manager.release_lock(('index', index_item['index_name']), xid,)
 
     def _update_from_old_tuple(self, old_tuple):
         new_tuple = list(old_tuple)
@@ -863,9 +894,21 @@ class PhysicalDelete(PhysicalOperator):
         for child in self.children:
             child.open()
 
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.acquire_lock(('table', table_name), xid, 'x')
+        for index_item in self.indexes:
+            lock_manager.acquire_lock(('index', index_item['index_name']), xid, 'x')
+
     def close(self):
         for child in self.children:
             child.close()
+
+        xid = transaction_mgr.session_xid()
+        table_name = self.logical_operator.table_name
+        lock_manager.release_lock(('table', table_name), xid)
+        for index_item in self.indexes:
+            lock_manager.release_lock(('index', index_item['index_name']), xid)
 
     def next(self):
         locations = []
