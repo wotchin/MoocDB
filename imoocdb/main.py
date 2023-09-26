@@ -10,6 +10,7 @@ from imoocdb.sql.parser.parser import query_parse
 from imoocdb.sql.optimizier.planner import query_plan
 from imoocdb.executor import exec_plan, Result
 from imoocdb.errors import RollbackError, NoticeError
+from imoocdb.storage.transaction.entry import transaction_mgr
 
 empty_result = Result()
 
@@ -28,20 +29,31 @@ def init_database_working_directory(path=DEFAULT_WORKING_DIRECTORY):
 def init_database(path=DEFAULT_WORKING_DIRECTORY):
     init_database_working_directory(path)
     init_catalog()
+    transaction_mgr.recovery()
 
 
 def exec_imoocdb_query(query_string) -> Result:
+    xid = -1
     try:
         ast = query_parse(query_string)
         plan = query_plan(ast)
-        result = exec_plan(plan)
+        if plan.name == 'Command':
+            result = exec_plan(plan)
+        else:
+            xid = transaction_mgr.start_transaction()
+            result = exec_plan(plan)
+            transaction_mgr.commit_transaction(xid)
         return result
     except RollbackError as e:
+        if xid > 0:
+            transaction_mgr.abort_transaction(xid)
         notice_client('ERROR', f'Cannot execute this query because {e}, aborting.')
         # todo: rollback operation
     except NoticeError as e:
         notice_client('ERROR', f'Cannot execute this query because {e}.')
     except Exception as e:
+        if xid > 0:
+            transaction_mgr.abort_transaction(xid)
         logging.exception(e)
     return empty_result
 

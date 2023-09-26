@@ -18,7 +18,7 @@ def test_lru():
     assert lru.get(4) == 4
     assert lru.get(5) == 5
 
-    assert str(lru.evicted) == '[1:1, 3:3]'
+    assert str(lru.evicted) == '{1: 1, 3: 3}'
     # [2,4,5] <-
     lru.pin(2)
     lru.put(6, 6)

@@ -21,6 +21,14 @@ class LRUNode:
     def __repr__(self):
         return f'{self.key}:{self.value}'
 
+    def __eq__(self, other):
+        if not isinstance(other, LRUNode):
+            return False
+        return self.key == other.key
+
+    def __hash__(self):
+        return hash(self.key)
+
 
 # todo: 当前LRU不是线程安全的，这在面对多个线程的时候，要加锁
 class LRUCache:
@@ -29,7 +37,7 @@ class LRUCache:
         self.cache = {}
         # 我们做一个小优化：
         # 先把被淘汰的数据暂存在这里 evicted
-        self.evicted = []
+        self.evicted = {}
 
         # LRU中的链表, 这里面我们实现的是双向链表
         # dummy node 技巧!! 可以帮我们少写很多边界条件的判断逻辑
@@ -63,7 +71,7 @@ class LRUCache:
                 raise LRUError('no available space for current node.')
             self._remove(evicted_node)
             del self.cache[evicted_node.key]
-            self.evicted.append(evicted_node)
+            self.evicted[evicted_node.key] = evicted_node.value
 
     def get(self, key):
         if key in self.cache:
@@ -107,11 +115,42 @@ class LRUCache:
         # 怎么遍历呢？
         pass
 
+
+class BufferPool:
+    def __init__(self, buffer_size=LRU_CAPACITY):
+        self.lru_cache = LRUCache(buffer_size)
+        self.dirty_pages = set()
+
+    def mark_dirty(self, key):
+        assert key in self.lru_cache.cache
+        self.dirty_pages.add(key)
+
+    def unmark_dirty(self, key):
+        self.dirty_pages.remove(key)
+
+    def get_all_dirty_pages(self):
+        for key in sorted(self.dirty_pages):
+            if key in self.lru_cache.cache:
+                yield key, self.lru_cache.get(key)
+            elif key in self.lru_cache.evicted:
+                yield key, self.lru_cache.evicted[key]
+            else:
+                assert False
+
+    def find_max_pageno(self, relation_name):
+        result = list(sorted(filter(lambda t: t[0] == relation_name, self.dirty_pages)))
+        if len(result) == 0:
+            return -1
+        return result[-1][1]
+
     def __getitem__(self, item):
-        return self.get(item)
+        return self.lru_cache.get(item)
 
     def __setitem__(self, key, value):
-        return self.put(key, value)
+        return self.lru_cache.put(key, value)
 
     def __contains__(self, item):
-        return item in self.cache
+        return item in self.lru_cache.cache
+
+
+buffer_pool = BufferPool()

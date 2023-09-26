@@ -21,6 +21,7 @@ from imoocdb.storage.entry import (table_tuple_get_all,
                                    index_tuple_get_equal_value_locations, index_tuple_get_range_locations,
                                    table_tuple_get_one, table_tuple_get_all_locations, table_tuple_update_one,
                                    table_tuple_delete_multiple, index_tuple_create)
+from imoocdb.storage.transaction.entry import checkpoint
 
 
 def is_condition_true(values: dict, condition):
@@ -936,4 +937,25 @@ class PhysicalDDL(PhysicalOperator):
         pass
 
     def next(self):
+        yield
+
+
+class CommandOperator(PhysicalOperator):
+    def __init__(self, command):
+        assert isinstance(command, str)
+        super().__init__('Command')
+        self.command = command
+
+    def open(self):
+        pass
+
+    def close(self):
+        pass
+
+    def next(self):
+        if self.command == 'CHECKPOINT':
+            checkpoint()
+        else:
+            raise NotImplementedError(f'not supported this command {self.command}.')
+
         yield

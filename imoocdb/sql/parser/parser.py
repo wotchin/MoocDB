@@ -37,6 +37,9 @@ class SQLLexer(sly.Lexer):
         # data type
         ID,
         INTEGER, QUOTE_STRING, DQUOTE_STRING, NULL,
+
+        # command
+        CHECKPOINT,
     }
 
     CREATE = 'CREATE'
@@ -72,6 +75,9 @@ class SQLLexer(sly.Lexer):
     VALUES = 'VALUES'
     UPDATE = 'UPDATE'
     SET = 'SET'
+
+    # command
+    CHECKPOINT = 'CHECKPOINT'
 
     # punctuation
     DOT = r'\.'
@@ -117,9 +123,15 @@ class SQLParser(sly.Parser):
        'insert',
        'delete',
        'create_table',
-       'create_index')
+       'create_index',
+       'command')
     def query(self, p):
         return p[0]
+
+    # command 解析
+    @_('CHECKPOINT',)
+    def command(self, p):
+        return Command(p[0])
 
     # select * ...;  -> Select([Star()]) ...
     @_('SELECT target_columns')

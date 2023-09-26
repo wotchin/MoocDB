@@ -123,3 +123,8 @@ class CreateIndex(ASTNode):
         self.table = table
         self.columns = columns
 
+
+class Command(ASTNode):
+    def __init__(self, command):
+        super().__init__()
+        self.command = command.strip().upper()

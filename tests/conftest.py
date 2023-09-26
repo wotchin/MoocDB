@@ -7,6 +7,7 @@ from imoocdb.catalog import CatalogTableForm, CatalogIndexForm
 from imoocdb.catalog.entry import catalog_index, catalog_table
 from imoocdb.main import init_database
 from imoocdb.storage.entry import table_tuple_insert_one, index_tuple_create
+from imoocdb.storage.transaction.entry import transaction_mgr
 
 TEST_DATA_DIRECTORY = 'test_database'
 
@@ -44,6 +45,8 @@ def setup():
     # create index idx on t1(id);
     catalog_index.insert(CatalogIndexForm('idx', ['id'], 't1'))
 
+    xid = transaction_mgr.start_transaction()
+
     table_tuple_insert_one('t1', (1, 'xiaoming'))
     table_tuple_insert_one('t1', (2, 'xiaohong'))
     table_tuple_insert_one('t1', (3, 'xiaoli'))
@@ -52,6 +55,8 @@ def setup():
     table_tuple_insert_one('t2', (1, 'ming', 'BJ'))
     table_tuple_insert_one('t2', (5, 'hong', 'SH'))
     table_tuple_insert_one('t2', (3, 'li', 'SZ'))
+
+    transaction_mgr.commit_transaction(xid)
 
     index_tuple_create('idx', 't1', ['id'])
 

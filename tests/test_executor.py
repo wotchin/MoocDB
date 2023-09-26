@@ -9,6 +9,7 @@ from imoocdb.sql.logical_operator import (
     Condition, InsertOperator, UpdateOperator, DeleteOperator)
 from imoocdb.sql.parser.ast import BinaryOperation, Identifier, Constant, JoinType
 from imoocdb.storage.entry import table_tuple_get_all, index_tuple_get_equal_value
+from imoocdb.storage.transaction.entry import transaction_mgr
 
 
 def construct_condition(sign, column, value):
@@ -139,6 +140,8 @@ def test_nested_loop_join():
 
 
 def test_physical_dml():
+    xid = transaction_mgr.start_transaction()
+
     logical_insert = InsertOperator(
         't1',
         [TableColumn('t1', 'id'), TableColumn('t1', 'name')],
@@ -196,3 +199,24 @@ def test_physical_dml():
     list(physical_delete.next())
     physical_delete.close()
 
+    transaction_mgr.commit_transaction(xid)
+
+
+def test_abort_physical_dml():
+    old_rows = list(table_tuple_get_all('t1'))
+    xid = transaction_mgr.start_transaction()
+    logical_insert = InsertOperator(
+        't1',
+        [TableColumn('t1', 'id'), TableColumn('t1', 'name')],
+        [(1, 'hello'), (2, 'world')]
+    )
+    physical_insert = PhysicalInsert(logical_insert)
+    physical_insert.open()
+    list(physical_insert.next())
+    physical_insert.close()
+
+    inserted_rows = list(table_tuple_get_all('t1'))
+    assert inserted_rows == old_rows + [(1, 'hello'), (2, 'world')]
+    transaction_mgr.abort_transaction(xid)
+    rows = list(table_tuple_get_all('t1'))
+    assert rows == old_rows
