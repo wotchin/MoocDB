@@ -125,6 +125,7 @@ class CreateIndex(ASTNode):
 
 
 class Command(ASTNode):
-    def __init__(self, command):
+    def __init__(self, command, args=None):
         super().__init__()
         self.command = command.strip().upper()
+        self.args = args

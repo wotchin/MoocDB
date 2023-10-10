@@ -568,7 +568,8 @@ def query_physical_plan(logical_plan: LogicalOperator) -> "PhysicalOperator":
     elif isinstance(logical_plan, DDLOperator):
         return PhysicalDDL(logical_plan)
     elif isinstance(logical_plan, Command):
-        return CommandOperator(logical_plan.command)
+        return CommandOperator(logical_plan.command,
+                               logical_plan.args)
     else:
         raise NotImplementedError(
             'not supported this logical plan.'

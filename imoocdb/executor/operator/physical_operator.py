@@ -2,6 +2,7 @@ import os
 import pickle
 import time
 
+import instr
 from imoocdb.catalog import CatalogTableForm, CatalogIndexForm
 from imoocdb.catalog.entry import catalog_table, catalog_index, catalog_function
 from imoocdb.common.fabric import TableColumn
@@ -984,13 +985,21 @@ class PhysicalDDL(PhysicalOperator):
 
 
 class CommandOperator(PhysicalOperator):
-    def __init__(self, command):
+    def __init__(self, command, args=None):
         assert isinstance(command, str)
         super().__init__('Command')
         self.command = command
+        if args is None:
+            self.args = None
+        else:
+            # args 是 expr 列表，而expr是identifier，需要通过
+            # parts 来获取具体的字符串内容
+            self.args = [identifier.parts for identifier in args]
 
     def open(self):
-        pass
+        if self.command == 'SHOW':
+            if self.args[0] == 'variables':
+                self.columns = ['name', 'value']
 
     def close(self):
         pass
@@ -998,7 +1007,15 @@ class CommandOperator(PhysicalOperator):
     def next(self):
         if self.command == 'CHECKPOINT':
             checkpoint()
+            yield
+        elif self.command == 'SHOW':
+            if self.args[0] == 'variables':
+                rows = [
+                    ('transaction_count', instr.transaction_count),
+                    ('current_xid', transaction_mgr.current_xid),
+                    ('activity_count', len(transaction_mgr.undo_mgr.active_transactions))
+                ]
+                for r in rows:
+                    yield r
         else:
             raise NotImplementedError(f'not supported this command {self.command}.')
-
-        yield

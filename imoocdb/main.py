@@ -14,6 +14,7 @@ from imoocdb.errors import RollbackError, NoticeError
 from imoocdb.storage.transaction.entry import transaction_mgr
 from network.pg_protocol import PGHandler, Int8Field, TextField, start_server
 from session_manager import set_session_parameter
+import instr
 
 empty_result = Result()
 
@@ -44,6 +45,8 @@ def exec_imoocdb_query(query_string, notice_client=notice_client_terminal) -> Re
             result = exec_plan(plan)
         else:
             xid = transaction_mgr.start_transaction()
+            # 传递引用，不要传递具体值
+            instr.transaction_count += 1
             result = exec_plan(plan)
             transaction_mgr.commit_transaction(xid)
         return result
@@ -135,4 +138,4 @@ def start_simple_imoocdb_process():
 
 
 # start_simple_terminal_client()
-# start_simple_imoocdb_process()
+start_simple_imoocdb_process()

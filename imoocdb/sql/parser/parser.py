@@ -39,7 +39,7 @@ class SQLLexer(sly.Lexer):
         INTEGER, QUOTE_STRING, DQUOTE_STRING, NULL,
 
         # command
-        CHECKPOINT,
+        CHECKPOINT, SHOW
     }
 
     CREATE = 'CREATE'
@@ -78,6 +78,7 @@ class SQLLexer(sly.Lexer):
 
     # command
     CHECKPOINT = 'CHECKPOINT'
+    SHOW = 'SHOW'
 
     # punctuation
     DOT = r'\.'
@@ -129,9 +130,13 @@ class SQLParser(sly.Parser):
         return p[0]
 
     # command 解析
-    @_('CHECKPOINT',)
+    @_('CHECKPOINT',
+       'SHOW expr_list')
     def command(self, p):
-        return Command(p[0])
+        if len(p) > 1:
+            return Command(p[0], p[1])
+        else:
+            return Command(p[0])
 
     # select * ...;  -> Select([Star()]) ...
     @_('SELECT target_columns')
