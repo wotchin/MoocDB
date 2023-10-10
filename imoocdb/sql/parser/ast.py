@@ -129,3 +129,9 @@ class Command(ASTNode):
         super().__init__()
         self.command = command.strip().upper()
         self.args = args
+
+
+class Explain(ASTNode):
+    def __init__(self, sql):
+        super().__init__()
+        self.sql = sql
