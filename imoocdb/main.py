@@ -3,6 +3,7 @@
 """
 import logging
 import os
+import threading
 
 from imoocdb.catalog import init_catalog
 from imoocdb.constant import DEFAULT_WORKING_DIRECTORY
@@ -11,11 +12,13 @@ from imoocdb.sql.optimizier.planner import query_plan
 from imoocdb.executor import exec_plan, Result
 from imoocdb.errors import RollbackError, NoticeError
 from imoocdb.storage.transaction.entry import transaction_mgr
+from network.pg_protocol import PGHandler, Int8Field, TextField, start_server
+from session_manager import set_session_parameter
 
 empty_result = Result()
 
 
-def notice_client(level, message):
+def notice_client_terminal(level, message):
     # print(f'{level}: {message}')
     logging.error(message)
 
@@ -32,7 +35,7 @@ def init_database(path=DEFAULT_WORKING_DIRECTORY):
     transaction_mgr.recovery()
 
 
-def exec_imoocdb_query(query_string) -> Result:
+def exec_imoocdb_query(query_string, notice_client=notice_client_terminal) -> Result:
     xid = -1
     try:
         ast = query_parse(query_string)
@@ -72,4 +75,64 @@ def start_simple_terminal_client():
         print(result)
 
 
+def bytes_to_str(b):
+    return b.strip(b'\x00').decode()
+
+
+class IMoocDBHandler(PGHandler):
+    def set_session_info(self, parameters):
+        pair = []
+        for i, p in enumerate(parameters):
+            pair.append(bytes_to_str(p))
+            if i % 2 != 0:
+                k, v = pair
+                set_session_parameter(k, v)
+                pair.clear()
+        set_session_parameter('id', threading.get_native_id())
+
+    def check_password(self, password: bytes):
+        return bytes_to_str(password) == 'abcd'
+
+    def query(self, sql):
+        # # mock测试数据
+        # fields = [Int8Field('a'), TextField('b')]
+        # rows = [[1, 'a'], [3, None], [5, 'c']]
+        # 用l来表示如果报错的话，这个错误级别
+        # m表示具体的报错的错误信息
+        l = None
+        m = None
+
+        # 这里是个callback函数，当发生问题的时候，会调用该函数，把
+        # 报错信息返回出去
+        def helper(level, message):
+            nonlocal l, m
+            l = level
+            m = message
+
+        result = exec_imoocdb_query(bytes_to_str(sql).strip(';'),
+                                    notice_client=helper)
+        if m is not None and l is not None:
+            if l == 'NOTICE':
+                raise NoticeError(m)
+            elif l == 'ERROR':
+                raise RollbackError(m)
+            else:
+                raise
+
+        if result.target_columns is None:
+            # insert协议实际上不是走下面的返回结果，但是不影响真实的
+            # 执行效果，也不影响用户的理解
+            fields = [Int8Field('effect rows')]
+            rows = [[len(result.rows)]]
+        else:
+            fields = [TextField(str(c)) for c in result.target_columns]
+            rows = result.rows
+        return fields, rows
+
+
+def start_simple_imoocdb_process():
+    start_server('localhost', 54321, IMoocDBHandler)
+
+
 # start_simple_terminal_client()
+start_simple_imoocdb_process()

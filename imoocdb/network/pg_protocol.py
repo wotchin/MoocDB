@@ -1,16 +1,18 @@
-import logging
-import socketserver
 import io
+import logging
+import threading
+import socketserver
 import struct
 from enum import Enum
-import logging
-
 
 # 实现兼容PG协议
 # 基本上，网络协议都包括两大类部分
 # 信令 (message type)：表示接下来的数据包是做哪个动作的  --- 谓语，什么动作
 # 内容 (length + content)：该信令下的具体操作内容详情        --- 做了什么，宾语
 # 例如说：吃 饭，吃 肉
+
+
+from imoocdb.errors import NoticeError, RollbackError
 
 
 class FeMessageType(Enum):
@@ -120,7 +122,7 @@ class ErrorResponse(Message):
         bytes_ = buf.to_bytes()
 
         self.buffer.write_bytes(b'E')
-        self.buffer.write_int32(4 + len(bytes_))
+        self.buffer.write_int32(4 + len(bytes_) + 1)
         self.buffer.write_string(bytes_)
 
 
@@ -177,7 +179,7 @@ class NoticeResponse(Message):
         bytes_ = buf.to_bytes()
 
         self.buffer.write_bytes(b'N')
-        self.buffer.write_int32(4 + len(bytes_))
+        self.buffer.write_int32(4 + len(bytes_) + 1)
         self.buffer.write_string(bytes_)
 
 
@@ -220,11 +222,11 @@ class DataRow(Message):
             buf = IOBuffer()
             for v in row:
                 value_bytes = self._encode(v)
-                print(value_bytes)
+                # print(value_bytes)
                 buf.write_int32(len(value_bytes))
                 buf.write_bytes(value_bytes)
             bytes_ = buf.to_bytes()
-            print(bytes_, len(bytes_), len(row))
+            # print(bytes_, len(bytes_), len(row))
             self.buffer.write_bytes(
                 struct.pack('!ciH', b'D', 4 + 2 + len(bytes_), len(row))
             )
@@ -256,17 +258,27 @@ class TextField(Field):
 
 
 class QueryResult(Message):
-    def write(self, result=None):
-        # mock测试数据
-        fields = [Int8Field('a'), TextField('b')]
-        rows = [[1, 'a'], [3, None], [5, 'c']]
-
+    def write(self, fields, rows):
         RowDescription(self.buffer).write(fields)
         DataRow(self.buffer).write(rows)
         CommandComplete(self.buffer).write(b'SELECT\x00')
 
 
 class PGHandler(socketserver.StreamRequestHandler):
+    def set_session_info(self, parameters):
+        print('parameters', parameters)
+
+    def check_password(self, password):
+        print('password', password)
+        return True
+
+    def query(self, sql):
+        # mock测试数据
+        print('sql', sql)
+        fields = [Int8Field('a'), TextField('b')]
+        rows = [[1, 'a'], [3, None], [5, 'c']]
+        return fields, rows
+
     def handle(self):
         r = IOBuffer(self.rfile)  # 来自用户的数据流
         w = IOBuffer(self.wfile)  # 返回给用户的数据流
@@ -279,18 +291,17 @@ class PGHandler(socketserver.StreamRequestHandler):
             # 正式读取用户信息
             version, parameters = StartupMessage(r).read()
             assert version == (3, 0)
-            print('parameters', parameters)
+            self.set_session_info(parameters)
 
             AuthenticationCleartextPassword(w).write()
             message_type = r.read_byte()
             print('password message type', message_type)
             if message_type != FeMessageType.PASSWORD_MESSAGE.value:
                 ErrorResponse(w).write('FATAL', '12345', 'invalid authorization')
-                # return
+                return
 
             password = ClearPassword(r).read()
-            print('password', password)
-            if password:
+            if self.check_password(password):
                 AuthenticationOk(w).write()
             else:
                 ErrorResponse(w).write('FATAL', '28000', 'invalid user/password')
@@ -305,25 +316,36 @@ class PGHandler(socketserver.StreamRequestHandler):
 
                 if message_type == FeMessageType.QUERY.value:
                     sql = QueryMessage(r).read()
-                    print('sql', sql)
-                    QueryResult(w).write()
+                    try:
+                        fields, rows = self.query(sql)
+                        QueryResult(w).write(fields, rows)
+                    except RollbackError as e:
+                        ErrorResponse(w).write('ERROR', '00001', str(e))
+                    except NoticeError as e:
+                        NoticeResponse(w).write('NOTICE', '00002', str(e))
+
                 elif message_type == FeMessageType.TERMINATION.value:
                     break
+                elif message_type == b'':
+                    pass
                 else:
                     raise NotImplementedError(f'unsupported messag type {message_type}')
-
+        except ConnectionAbortedError as e:
+            pass
+        except ConnectionResetError as e:
+            print('client exits.')
         except Exception as e:
             logging.exception(e)
 
 
-class Server(socketserver.TCPServer):
+class Server(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
 
 
-def main():
-    server = Server(('localhost', 54321), PGHandler)
+def start_server(host, port, handler=PGHandler):
+    server = Server((host, port), handler)
     server.serve_forever()
 
 
 if __name__ == '__main__':
-    main()
+    start_server('localhost', 54321)
