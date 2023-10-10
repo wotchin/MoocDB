@@ -3,6 +3,7 @@
 """
 import logging
 import os
+import re
 import threading
 
 from imoocdb.catalog import init_catalog
@@ -13,7 +14,7 @@ from imoocdb.executor import exec_plan, Result
 from imoocdb.errors import RollbackError, NoticeError
 from imoocdb.storage.transaction.entry import transaction_mgr
 from network.pg_protocol import PGHandler, Int8Field, TextField, start_server
-from session_manager import set_session_parameter
+from session_manager import set_session_parameter, get_session_parameter
 import instr
 
 empty_result = Result()
@@ -92,8 +93,14 @@ class IMoocDBHandler(PGHandler):
                 set_session_parameter(k, v)
                 pair.clear()
         set_session_parameter('id', threading.get_native_id())
+        set_session_parameter('client', '%s:%d' % self.client_address)
 
     def check_password(self, password: bytes):
+        # ACL的鉴权过程
+        client = get_session_parameter('client')
+        user = get_session_parameter('user')
+        # if not client.startswith('127.0.0.1') or user != 'postgres':
+        #     return False
         return bytes_to_str(password) == 'abcd'
 
     def query(self, sql):
